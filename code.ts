@@ -65,6 +65,10 @@ console.log('[编号标注] 插件已启动');
 
 figma.ui.onmessage = (msg: { type: string; [key: string]: unknown }) => {
   switch (msg.type) {
+    case 'ready':
+      // UI 就绪，发送初始数据
+      syncAllAnnotations();
+      break;
     case 'badge-clicked':
       handleBadgeClicked();
       break;
@@ -743,10 +747,6 @@ function closePopup(annotationId: string): void {
 // ══════════════════════════════════════════════
 // 生命周期
 // ══════════════════════════════════════════════
-
-// 展开面板时初始化同步
-handleBadgeClicked();
-handleCollapsePanel();
 
 // 关闭插件时清理所有浮窗
 figma.on('close', () => {
