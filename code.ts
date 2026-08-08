@@ -1,3 +1,5 @@
+/// <reference types="@figma/plugin-typings" />
+
 /**
  * Figma 编号标注插件 — 沙箱主入口
  */
@@ -761,30 +763,38 @@ figma.on('documentchange', (event) => {
       continue;
     }
 
-    // ── 属性变更：位置移动 ──
-    if (
-      change.type !== 'PROPERTY_CHANGE' ||
-      !hasPositionChanged(change.properties)
-    ) {
+    if (change.type !== 'PROPERTY_CHANGE') continue;
+    const node = change.node as SceneNode;
+
+    // 1. 编号点本身或其子节点发生变化（拖拽/缩放/改形状/改外观）
+    //    → 更新偏移 或 锁定复位（锁定状态下任何修改都禁止）
+    const marker = findMarkerOfNode(node);
+    if (marker) {
+      handleAnnotationChange(marker);
       continue;
     }
 
-    const node = change.node as SceneNode;
-
-    // 1. 编号点本身被拖拽 → 更新偏移或锁定复位
-    if (
-      node.type === 'GROUP' &&
-      node.name.startsWith(ANNOTATION_PREFIX)
-    ) {
-      handleAnnotationPositionChange(node as GroupNode);
-    }
-
     // 2. 目标图层被移动 → 关联的编号点跟随
-    if (!isProgrammaticMove) {
+    if (!isProgrammaticMove && hasPositionChanged(change.properties)) {
       handleTargetNodeMoved(node);
     }
   }
 });
+
+/** 向上回溯节点父链，找到所属的编号点 Group（含自身） */
+function findMarkerOfNode(node: SceneNode): GroupNode | null {
+  let current: BaseNode | null = node;
+  while (current) {
+    if (
+      current.type === 'GROUP' &&
+      current.name.startsWith(ANNOTATION_PREFIX)
+    ) {
+      return current as GroupNode;
+    }
+    current = current.parent;
+  }
+  return null;
+}
 
 /**
  * 备份所有编号点数据到 root PluginData
@@ -880,18 +890,18 @@ function hasPositionChanged(properties: readonly string[]): boolean {
 }
 
 /**
- * 处理编号点的位置变化
+ * 处理编号点及其子节点的属性变化
  * - 程序化移动：忽略
- * - 锁定状态下用户拖拽：复位并提示
- * - 正常状态下用户拖拽：更新偏移量
+ * - 锁定状态下任何修改（拖拽/缩放/改形状/改外观）：完整复位并提示
+ * - 正常状态下位置变化：更新偏移量
  */
-function handleAnnotationPositionChange(marker: GroupNode): void {
+function handleAnnotationChange(marker: GroupNode): void {
   if (isProgrammaticMove) return;
 
   if (marker.getPluginData(PD.isLocked) === 'true') {
-    // 锁定 → 复位
-    resetMarkerPosition(marker);
-    figma.notify('该编号点已锁定，无法移动');
+    // 锁定 → 完整复位（位置 + 尺寸 + 外观）
+    resetMarkerState(marker);
+    figma.notify('该编号点已锁定，无法修改');
     return;
   }
 
@@ -913,6 +923,127 @@ function handleAnnotationPositionChange(marker: GroupNode): void {
 
   // 更新备份（位置变化）
   backupAllAnnotations();
+}
+
+/** 锁定状态下完整复位编号点：位置 + 尺寸 + 形状 + 外观 */
+function resetMarkerState(marker: GroupNode): void {
+  const ellipse = marker.children[0] as EllipseNode | undefined;
+  const text = marker.children[1] as TextNode | undefined;
+
+  isProgrammaticMove = true;
+  try {
+    // 1. 复位子节点局部位置与变换（解除翻转/镜像）
+    if (ellipse) {
+      ellipse.x = 0;
+      ellipse.y = 0;
+      ellipse.relativeTransform = IDENTITY_MATRIX;
+      ellipse.rotation = 0;
+    }
+    if (text) {
+      text.x = 0;
+      text.y = 0;
+      text.relativeTransform = IDENTITY_MATRIX;
+      text.rotation = 0;
+    }
+
+    // 2. 尺寸复位（Group 及子节点恢复 24×24）
+    if (ellipse && (ellipse.width !== MARKER_SIZE || ellipse.height !== MARKER_SIZE)) {
+      ellipse.resize(MARKER_SIZE, MARKER_SIZE);
+    }
+    if (text && (text.width !== MARKER_SIZE || text.height !== MARKER_SIZE)) {
+      text.resize(MARKER_SIZE, MARKER_SIZE);
+    }
+    if (marker.width !== MARKER_SIZE || marker.height !== MARKER_SIZE) {
+      marker.resize(MARKER_SIZE, MARKER_SIZE);
+    }
+
+    // 3. Group 自身变换复位（翻转/旋转）
+    marker.rotation = 0;
+
+    // 4. 外观复位
+    updateMarkerAppearance(marker);
+
+    // 5. 位置复位（基于存储的偏移量，放在最后以覆盖前面操作引起的位置变化）
+    resetMarkerPosition(marker);
+  } finally {
+    isProgrammaticMove = false;
+  }
+}
+
+/** 单位变换矩阵（用于解除翻转/镜像） */
+const IDENTITY_MATRIX: Transform = [
+  [1, 0, 0],
+  [0, 1, 0],
+] as Transform;
+
+/**
+ * 定时轮询：检查锁定编号点的状态完整性。
+ * Figma 的部分操作（如垂直翻转）不触发 documentchange 事件，
+ * 轮询作为兜底，发现状态与锁定基准不符立即复位。
+ */
+setInterval(checkLockedMarkers, 500);
+
+/** 检查所有锁定编号点的状态 */
+function checkLockedMarkers(): void {
+  for (const marker of findAllAnnotationGroups()) {
+    if (marker.getPluginData(PD.isLocked) !== 'true') continue;
+    if (!isMarkerStateClean(marker)) {
+      resetMarkerState(marker);
+    }
+  }
+}
+
+/** 校验锁定编号点状态是否与基准一致（位置/尺寸/形状/变换） */
+function isMarkerStateClean(marker: GroupNode): boolean {
+  // 位置
+  const offsetX = Number(marker.getPluginData(PD.offsetX)) || 0;
+  const offsetY = Number(marker.getPluginData(PD.offsetY)) || 0;
+  let expectedX = offsetX;
+  let expectedY = offsetY;
+  const targetNodeId = marker.getPluginData(PD.targetNodeId);
+  if (targetNodeId) {
+    const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+    if (target) {
+      const box = target.absoluteBoundingBox;
+      if (box) {
+        expectedX = box.x + offsetX;
+        expectedY = box.y + offsetY;
+      }
+    }
+  }
+  if (Math.abs(marker.x - expectedX) > 0.5 || Math.abs(marker.y - expectedY) > 0.5) {
+    return false;
+  }
+
+  // 尺寸与旋转
+  if (marker.width !== MARKER_SIZE || marker.height !== MARKER_SIZE) return false;
+  if (marker.rotation !== 0) return false;
+
+  // 子节点：局部位置、形状变换（翻转/镜像）
+  const ellipse = marker.children[0] as EllipseNode | undefined;
+  const text = marker.children[1] as TextNode | undefined;
+
+  if (ellipse) {
+    if (ellipse.x !== 0 || ellipse.y !== 0) return false;
+    if (ellipse.width !== MARKER_SIZE || ellipse.height !== MARKER_SIZE) return false;
+    if (hasFlipTransform(ellipse.relativeTransform)) return false;
+  }
+  if (text) {
+    if (text.x !== 0 || text.y !== 0) return false;
+    if (hasFlipTransform(text.relativeTransform)) return false;
+  }
+
+  return true;
+}
+
+/** 检测变换矩阵是否包含翻转/镜像（矩阵的旋转缩放部分偏离单位矩阵） */
+function hasFlipTransform(tr: Transform): boolean {
+  return (
+    Math.abs(tr[0][0] - 1) > 0.001 ||
+    Math.abs(tr[0][1]) > 0.001 ||
+    Math.abs(tr[1][0]) > 0.001 ||
+    Math.abs(tr[1][1] - 1) > 0.001
+  );
 }
 
 /** 用户拖拽后重新计算并存储偏移量 */
