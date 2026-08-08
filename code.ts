@@ -8,8 +8,7 @@
 // 常量
 // ══════════════════════════════════════════════
 
-const MARKER_SIZE = 24;
-const MARKER_COLOR: RGBA = { r: 0.29, g: 0.565, b: 0.851, a: 1 }; // #4A90D9
+const MARKER_COLOR: RGBA = { r: 0.29, g: 0.565, b: 0.851, a: 1 }; // #4A90D9 默认色
 const MARKER_STROKE_COLOR: RGBA = { r: 1, g: 1, b: 1, a: 1 };
 const MARKER_TEXT_COLOR: RGBA = { r: 1, g: 1, b: 1, a: 1 };
 const ANNOTATION_PREFIX = '[Annotation]';
@@ -24,7 +23,65 @@ const PD = {
   note: 'ann_note',
   isLocked: 'ann_locked',
   backup: 'ann_backup',
+  config: 'ann_config',
 } as const;
+
+/** 全局配置（作用于所有编号点） */
+interface PluginConfig {
+  color: RGB;          // 编号点颜色
+  size: number;        // 编号点尺寸（px）
+  charsPerLine: number; // 备注区域每行字符数（按标准字号 12px 计算）
+  fontSize: number;    // 备注文字字号
+}
+
+/** 标准字号下每字符宽度（px），用于换算备注区域宽度 */
+const CHAR_WIDTH = 7;
+
+/** 默认配置 */
+function defaultConfig(): PluginConfig {
+  return {
+    color: { r: 0.29, g: 0.565, b: 0.851 }, // #4A90D9
+    size: 24,
+    charsPerLine: 20,
+    fontSize: 12,
+  };
+}
+
+/** 获取全局配置（不存在或字段缺失则合并默认值） */
+function getConfig(): PluginConfig {
+  const raw = figma.root.getPluginData(PD.config);
+  const base = defaultConfig();
+  if (!raw) return base;
+
+  try {
+    const cfg = JSON.parse(raw) as Partial<PluginConfig>;
+    const color =
+      cfg.color &&
+      typeof cfg.color.r === 'number' &&
+      typeof cfg.color.g === 'number' &&
+      typeof cfg.color.b === 'number'
+        ? cfg.color
+        : base.color;
+    return {
+      color,
+      size: typeof cfg.size === 'number' ? cfg.size : base.size,
+      charsPerLine: typeof cfg.charsPerLine === 'number' ? cfg.charsPerLine : base.charsPerLine,
+      fontSize: typeof cfg.fontSize === 'number' ? cfg.fontSize : base.fontSize,
+    };
+  } catch {
+    return base;
+  }
+}
+
+/** 保存全局配置 */
+function saveConfig(config: PluginConfig): void {
+  figma.root.setPluginData(PD.config, JSON.stringify(config));
+}
+
+/** 当前配置下的编号点尺寸 */
+function getMarkerSize(): number {
+  return getConfig().size;
+}
 
 // 目标节点上的反向引用键
 const REF_KEY = 'ann_refs';
@@ -105,6 +162,9 @@ figma.ui.onmessage = (msg: { type: string; [key: string]: unknown }) => {
     case 'cancel-overlay':
       exitOverlay();
       break;
+    case 'update-config':
+      handleUpdateConfig(msg.config as PluginConfig);
+      break;
     case 'delete-annotation':
       handleDeleteAnnotation(msg.annotationId as string);
       break;
@@ -131,7 +191,7 @@ figma.ui.onmessage = (msg: { type: string; [key: string]: unknown }) => {
 
 function handleBadgeClicked(): void {
   uiIsExpanded = true;
-  figma.ui.resize(320, 480);
+  figma.ui.resize(340, 480);
   figma.ui.postMessage({ type: 'panel-expanded' });
   syncAllAnnotations();
 }
@@ -237,10 +297,13 @@ async function createMarkerNode(
   // 加载字体（必须在使用前加载）
   await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
 
+  const size = getMarkerSize();
+  const config = getConfig();
+
   // -- 圆形 --
   const ellipse = figma.createEllipse();
-  ellipse.resize(MARKER_SIZE, MARKER_SIZE);
-  ellipse.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
+  ellipse.resize(size, size);
+  ellipse.fills = [{ type: 'SOLID', color: config.color }];
   ellipse.strokes = [{ type: 'SOLID', color: MARKER_STROKE_COLOR }];
   ellipse.strokeWeight = 2;
   ellipse.effects = [
@@ -254,15 +317,15 @@ async function createMarkerNode(
     },
   ];
 
-  // -- 文字 --
+  // -- 文字（字号随尺寸，约一半） --
   const text = figma.createText();
   text.characters = String(order);
-  text.fontSize = 12;
+  text.fontSize = Math.max(10, Math.round(size / 2));
   text.fontName = { family: 'Inter', style: 'Medium' };
   text.fills = [{ type: 'SOLID', color: MARKER_TEXT_COLOR }];
   text.textAlignHorizontal = 'CENTER';
   text.textAlignVertical = 'CENTER';
-  text.resize(MARKER_SIZE, MARKER_SIZE);
+  text.resize(size, size);
 
   // -- 组合 --
   // 先将 ellipse 和 text 创建在 (0,0)，组合后再移动到目标位置
@@ -349,13 +412,15 @@ function updatePopupContent(annotationId: string): void {
   if (!contentText) return;
 
   contentText.characters = text;
+  contentText.fontSize = getConfig().fontSize;
+  contentText.lineHeight = { value: getConfig().fontSize + 6, unit: 'PIXELS' };
 
-  // 重新计算尺寸
+  // 重新计算尺寸（内容宽度 = 每行字符数 × 标准字符宽）
   const closeText = popup.children.find(
     (c) => c.type === 'TEXT' && c.name === 'popupClose',
   ) as TextNode | undefined;
 
-  const contentW = Math.min(Math.max(contentText.width, 160), 240);
+  const contentW = getConfig().charsPerLine * CHAR_WIDTH;
   contentText.resize(contentW, contentText.height);
   const frameW = 44 + contentW + 24;
   const frameH = Math.max(44, contentText.y + contentText.height + 16);
@@ -389,6 +454,9 @@ function handleToggleLock(annotationId: string): void {
     type: 'annotation-updated',
     annotation: readAnnotationData(marker),
   });
+
+  // 锁定状态写入备份（画布删除恢复时保持锁定态）
+  backupAllAnnotations();
 }
 
 /**
@@ -396,13 +464,111 @@ function handleToggleLock(annotationId: string): void {
  */
 function updateMarkerAppearance(marker: GroupNode): void {
   const isLocked = marker.getPluginData(PD.isLocked) === 'true';
-  const ellipse = marker.children[0] as EllipseNode;
+  const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
+  if (!ellipse) return;
 
   if (isLocked) {
     ellipse.fills = [{ type: 'SOLID', color: { r: 0.753, g: 0.769, b: 0.8 } }]; // #C0C4CC
   } else {
-    ellipse.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
+    ellipse.fills = [{ type: 'SOLID', color: getConfig().color }];
   }
+}
+
+// ══════════════════════════════════════════════
+// 全局配置（颜色 / 尺寸 / 备注区域）
+// ══════════════════════════════════════════════
+
+/** 处理全局配置更新：保存并应用到所有编号点和浮窗 */
+function handleUpdateConfig(config: PluginConfig): void {
+  const sanitized: PluginConfig = {
+    color: config.color || getConfig().color,
+    size: clampNumber(config.size, 12, 60, 24),
+    charsPerLine: clampNumber(config.charsPerLine, 8, 60, 20),
+    fontSize: clampNumber(config.fontSize, 10, 24, 12),
+  };
+
+  saveConfig(sanitized);
+  applyConfig(sanitized);
+
+  // 同步 UI 显示当前配置
+  figma.ui.postMessage({ type: 'config-updated', config: sanitized });
+}
+
+/** 将配置应用到所有编号点和浮窗（锁定编号点跳过） */
+function applyConfig(config: PluginConfig): void {
+  // 1. 颜色 + 尺寸应用到编号点
+  for (const marker of findAllAnnotationGroups()) {
+    if (marker.getPluginData(PD.isLocked) === 'true') continue;
+
+    updateMarkerAppearance(marker);
+    applySizeToMarker(marker, config.size);
+  }
+
+  // 2. 备注区域宽度 + 字号应用到所有浮窗
+  for (const popup of activePopups.values()) {
+    if (!popup.removed) {
+      applyPopupStyle(popup, config);
+    }
+  }
+  layoutAllPopups();
+}
+
+/** 将配置尺寸应用到单个编号点（左上角锚定） */
+function applySizeToMarker(marker: GroupNode, size: number): void {
+  const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
+  const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
+
+  isProgrammaticMove = true;
+  try {
+    if (ellipse) ellipse.resize(size, size);
+    if (text) {
+      text.resize(size, size);
+      text.fontSize = Math.max(10, Math.round(size / 2));
+    }
+    marker.resize(size, size);
+  } finally {
+    isProgrammaticMove = false;
+  }
+}
+
+/** 将配置应用到单个浮窗（序号圆颜色 + 内容宽度 + 字号） */
+function applyPopupStyle(popup: FrameNode, config: PluginConfig): void {
+  // 序号圆颜色同步
+  const badge = popup.children.find(
+    (c) => c.type === 'ELLIPSE' && c.name === 'popupBadge',
+  ) as EllipseNode | undefined;
+  if (badge) {
+    badge.fills = [{ type: 'SOLID', color: config.color }];
+  }
+
+  const contentText = popup.children.find(
+    (c) => c.type === 'TEXT' && c.name === 'popupContent',
+  ) as TextNode | undefined;
+  if (!contentText) return;
+
+  contentText.fontSize = config.fontSize;
+  contentText.lineHeight = { value: config.fontSize + 6, unit: 'PIXELS' };
+
+  // 内容宽度 = 每行字符数 × 标准字符宽
+  const contentW = config.charsPerLine * CHAR_WIDTH;
+  contentText.resize(contentW, contentText.height);
+
+  const frameW = 44 + contentW + 24;
+  const frameH = Math.max(44, contentText.y + contentText.height + 16);
+  popup.resize(frameW, frameH);
+
+  const closeText = popup.children.find(
+    (c) => c.type === 'TEXT' && c.name === 'popupClose',
+  ) as TextNode | undefined;
+  if (closeText) {
+    closeText.x = frameW - closeText.width - 10;
+  }
+}
+
+/** 数值范围约束 */
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || isNaN(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 // ══════════════════════════════════════════════
@@ -416,9 +582,10 @@ function enterOverlay(mode: OverlayState, annotationId?: string): void {
   overlayState = 'linking';
   pendingLinkAnnotationId = annotationId || '';
 
-  // 全屏覆盖：UI iframe 铺满视口
+  // 全屏覆盖：UI iframe 铺满视口（resize 使用屏幕像素 = 文档单位 × zoom）
   const bounds = figma.viewport.bounds;
-  figma.ui.resize(bounds.width, bounds.height);
+  const zoom = figma.viewport.zoom;
+  figma.ui.resize(Math.round(bounds.width * zoom), Math.round(bounds.height * zoom));
   figma.ui.postMessage({ type: 'overlay-mode', mode: 'linking' });
 }
 
@@ -430,7 +597,7 @@ function exitOverlay(): void {
   pendingLinkAnnotationId = '';
 
   if (uiIsExpanded) {
-    figma.ui.resize(320, 480);
+    figma.ui.resize(340, 480);
     figma.ui.postMessage({ type: 'panel-expanded' });
   } else {
     figma.ui.resize(48, 48);
@@ -456,14 +623,15 @@ function handleLinkTo(screenX: number, screenY: number): void {
 
 /**
  * 屏幕坐标 → 画布坐标
- * 基于 viewport.center / bounds / zoom 换算（Figma 插件 API 无官方转换方法）
+ * viewport.bounds 的 (x, y) 是可见视口左上角的画布坐标，
+ * bounds 宽高是文档单位：世界坐标 = bounds 左上角 + 屏幕偏移 / zoom
  */
 function screenToWorld(screen: { x: number; y: number }): { x: number; y: number } {
   const bounds = figma.viewport.bounds;
   const zoom = figma.viewport.zoom;
   return {
-    x: figma.viewport.center.x + (screen.x - bounds.x - bounds.width / 2) / zoom,
-    y: figma.viewport.center.y + (screen.y - bounds.y - bounds.height / 2) / zoom,
+    x: bounds.x + screen.x / zoom,
+    y: bounds.y + screen.y / zoom,
   };
 }
 
@@ -597,9 +765,11 @@ function renumberAll(): void {
     const oldOrder = marker.getPluginData(PD.order);
     if (String(newOrder) !== oldOrder) {
       marker.setPluginData(PD.order, String(newOrder));
-      // 更新文字
-      const textNode = marker.children[1] as TextNode;
-      textNode.characters = String(newOrder);
+      // 更新文字（按类型查找，避免下标失效）
+      const textNode = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
+      if (textNode) {
+        textNode.characters = String(newOrder);
+      }
       // 更新名称
       marker.name = `${ANNOTATION_PREFIX} #${newOrder}`;
       // 同步浮窗序号
@@ -659,39 +829,31 @@ function readAnnotationData(marker: GroupNode): AnnotationData {
 function syncAllAnnotations(): void {
   const all = findAllAnnotationGroups().map(readAnnotationData);
   all.sort((a, b) => a.order - b.order);
-  figma.ui.postMessage({ type: 'init', annotations: all });
+  figma.ui.postMessage({
+    type: 'init',
+    annotations: all,
+    config: getConfig(),
+  });
 }
 
 // ══════════════════════════════════════════════
 // 查找工具
 // ══════════════════════════════════════════════
 
-/** 扫描当前页面所有编号点 Group */
+/** 扫描当前页面所有编号点 Group（递归，以 PluginData 为准） */
 function findAllAnnotationGroups(): GroupNode[] {
-  const results: GroupNode[] = [];
-  for (const node of figma.currentPage.children) {
-    if (
-      node.type === 'GROUP' &&
-      node.name.startsWith(ANNOTATION_PREFIX)
-    ) {
-      results.push(node);
-    }
-  }
-  return results;
+  return figma.currentPage.findAll(
+    (n) => n.type === 'GROUP' && n.getPluginData(PD.annotationId) !== '',
+  ) as GroupNode[];
 }
 
 /** 按 annotationId 查找编号点 */
 function findAnnotationById(annotationId: string): GroupNode | null {
-  for (const node of figma.currentPage.children) {
-    if (
-      node.type === 'GROUP' &&
-      node.name.startsWith(ANNOTATION_PREFIX) &&
-      node.getPluginData(PD.annotationId) === annotationId
-    ) {
-      return node;
-    }
-  }
-  return null;
+  if (!annotationId) return null;
+  const found = figma.currentPage.findAll(
+    (n) => n.type === 'GROUP' && n.getPluginData(PD.annotationId) === annotationId,
+  );
+  return (found[0] as GroupNode) || null;
 }
 
 /** 获取下一个可用序号 */
@@ -820,6 +982,10 @@ function restoreDeletedMarker(deletedId: string): void {
   const data = list.find((a) => a.nodeId === deletedId);
   if (!data) return;
 
+  // 防重复：同 annotationId 的编号点已存在则不恢复
+  // （场景：删除后用户按 Ctrl+Z 撤销，Figma 恢复了原始节点）
+  if (findAnnotationById(data.annotationId)) return;
+
   figma.notify('编号点请通过插件面板删除');
   void restoreMarker(data);
 }
@@ -901,7 +1067,7 @@ function handleAnnotationChange(marker: GroupNode): void {
   if (marker.getPluginData(PD.isLocked) === 'true') {
     // 锁定 → 完整复位（位置 + 尺寸 + 外观）
     resetMarkerState(marker);
-    figma.notify('该编号点已锁定，无法修改');
+    notifyLockedThrottled();
     return;
   }
 
@@ -925,10 +1091,20 @@ function handleAnnotationChange(marker: GroupNode): void {
   backupAllAnnotations();
 }
 
+/** 锁定提示节流：2 秒内最多提示一次（避免程序化复位触发连续弹窗） */
+let lastLockedNotifyTime = 0;
+function notifyLockedThrottled(): void {
+  const now = Date.now();
+  if (now - lastLockedNotifyTime > 2000) {
+    figma.notify('该编号点已锁定，无法修改');
+    lastLockedNotifyTime = now;
+  }
+}
+
 /** 锁定状态下完整复位编号点：位置 + 尺寸 + 形状 + 外观 */
 function resetMarkerState(marker: GroupNode): void {
-  const ellipse = marker.children[0] as EllipseNode | undefined;
-  const text = marker.children[1] as TextNode | undefined;
+  const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
+  const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
 
   isProgrammaticMove = true;
   try {
@@ -946,15 +1122,16 @@ function resetMarkerState(marker: GroupNode): void {
       text.rotation = 0;
     }
 
-    // 2. 尺寸复位（Group 及子节点恢复 24×24）
-    if (ellipse && (ellipse.width !== MARKER_SIZE || ellipse.height !== MARKER_SIZE)) {
-      ellipse.resize(MARKER_SIZE, MARKER_SIZE);
+    // 2. 尺寸复位（Group 及子节点恢复配置尺寸）
+    const size = getMarkerSize();
+    if (ellipse && (ellipse.width !== size || ellipse.height !== size)) {
+      ellipse.resize(size, size);
     }
-    if (text && (text.width !== MARKER_SIZE || text.height !== MARKER_SIZE)) {
-      text.resize(MARKER_SIZE, MARKER_SIZE);
+    if (text && (text.width !== size || text.height !== size)) {
+      text.resize(size, size);
     }
-    if (marker.width !== MARKER_SIZE || marker.height !== MARKER_SIZE) {
-      marker.resize(MARKER_SIZE, MARKER_SIZE);
+    if (marker.width !== size || marker.height !== size) {
+      marker.resize(size, size);
     }
 
     // 3. Group 自身变换复位（翻转/旋转）
@@ -1016,16 +1193,17 @@ function isMarkerStateClean(marker: GroupNode): boolean {
   }
 
   // 尺寸与旋转
-  if (marker.width !== MARKER_SIZE || marker.height !== MARKER_SIZE) return false;
+  const size = getMarkerSize();
+  if (marker.width !== size || marker.height !== size) return false;
   if (marker.rotation !== 0) return false;
 
   // 子节点：局部位置、形状变换（翻转/镜像）
-  const ellipse = marker.children[0] as EllipseNode | undefined;
-  const text = marker.children[1] as TextNode | undefined;
+  const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
+  const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
 
   if (ellipse) {
     if (ellipse.x !== 0 || ellipse.y !== 0) return false;
-    if (ellipse.width !== MARKER_SIZE || ellipse.height !== MARKER_SIZE) return false;
+    if (ellipse.width !== size || ellipse.height !== size) return false;
     if (hasFlipTransform(ellipse.relativeTransform)) return false;
   }
   if (text) {
@@ -1114,10 +1292,15 @@ function handleTargetNodeMoved(targetNode: SceneNode): void {
   });
   if (markers.length === 0) return;
 
-  const box = targetNode.absoluteBoundingBox;
-  if (!box) return;
-
+  // 每个编号点用自己的直接绑定目标的实时 absoluteBoundingBox 计算新位置
+  // （容器移动后，子节点的 absoluteBoundingBox 已实时更新）
   for (const marker of markers) {
+    const targetId = marker.getPluginData(PD.targetNodeId);
+    const target = targetId ? (figma.getNodeById(targetId) as SceneNode | null) : null;
+    if (!target) continue;
+    const box = target.absoluteBoundingBox;
+    if (!box) continue;
+
     const offsetX = Number(marker.getPluginData(PD.offsetX)) || 0;
     const offsetY = Number(marker.getPluginData(PD.offsetY)) || 0;
     moveMarkerProgrammatically(marker, box.x + offsetX, box.y + offsetY);
@@ -1209,6 +1392,12 @@ function findPopupFrameFromSelection(node: SceneNode): FrameNode | null {
   return null;
 }
 
+/** 浮窗创建中的编号点 ID 集合（防止异步创建期间重复创建） */
+const popupCreating = new Set<string>();
+
+/** 刚由插件自动创建浮窗的编号点 ID（添加编号点后短暂生效，抑制自动选中触发的 click 移动） */
+const autoCreatedIds = new Set<string>();
+
 /**
  * 为编号点创建或刷新浮窗
  * - mode='auto'：创建后自动显示，位置在关联图层右侧（顶部对齐）；无关联则在编号点右侧
@@ -1220,15 +1409,26 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
 
   if (existing && !existing.removed) {
     // 已存在 → 点击唤出时移动到编号点旁，并刷新内容保证最新
-    if (mode === 'click') {
+    // （刚自动创建的不移动，避免添加时的自动选中把浮窗从图层右侧拉走）
+    if (mode === 'click' && !autoCreatedIds.has(annotationId)) {
       positionPopupNearMarker(existing, marker);
       updatePopupContent(annotationId);
     }
     return;
   }
 
+  // 创建中：忽略重复请求（添加时 auto 创建 + selectionchange 触发 click 的竞态）
+  if (popupCreating.has(annotationId)) return;
+
+  popupCreating.add(annotationId);
+  if (mode === 'auto') {
+    autoCreatedIds.add(annotationId);
+  }
+
   // 创建新浮窗（异步加载字体）
   createPopupFrame(marker, mode).then((popup) => {
+    popupCreating.delete(annotationId);
+    autoCreatedIds.delete(annotationId);
     if (!popup) return;
     // 竞态保护：创建期间编号点可能已被删除，此时丢弃刚创建的浮窗
     if (!findAnnotationById(annotationId)) {
@@ -1243,7 +1443,7 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
 
 /** 将浮窗移动到编号点右侧（点击模式：临时查看，不参与图层右侧布局） */
 function positionPopupNearMarker(popup: FrameNode, marker: GroupNode): void {
-  popup.x = marker.x + MARKER_SIZE + 10;
+  popup.x = marker.x + getMarkerSize() + 10;
   popup.y = marker.y;
   popup.setPluginData('popupMode', 'click');
 }
@@ -1369,6 +1569,8 @@ async function createPopupFrame(
   const note = marker.getPluginData(PD.note) || '(暂无备注)';
   const order = marker.getPluginData(PD.order);
   const annotationId = marker.getPluginData(PD.annotationId);
+  const config = getConfig();
+  const badgeSize = getMarkerSize();
 
   await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
@@ -1391,11 +1593,11 @@ async function createPopupFrame(
   frame.clipsContent = false;
   frame.setPluginData('popupFor', annotationId);
 
-  // ── 蓝色圆形序号（与编号点同款） ──
+  // ── 圆形序号（与编号点同款颜色/尺寸） ──
   const badge = figma.createEllipse();
   badge.name = 'popupBadge';
-  badge.resize(24, 24);
-  badge.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
+  badge.resize(badgeSize, badgeSize);
+  badge.fills = [{ type: 'SOLID', color: config.color }];
   badge.strokes = [{ type: 'SOLID', color: MARKER_STROKE_COLOR }];
   badge.strokeWeight = 2;
   badge.x = 10;
@@ -1405,22 +1607,22 @@ async function createPopupFrame(
   const numText = figma.createText();
   numText.name = 'popupNum';
   numText.characters = order;
-  numText.fontSize = 12;
+  numText.fontSize = Math.max(10, Math.round(badgeSize / 2));
   numText.fontName = { family: 'Inter', style: 'Medium' };
   numText.fills = [{ type: 'SOLID', color: MARKER_TEXT_COLOR }];
-  numText.x = 10 + (24 - numText.width) / 2;
-  numText.y = 10 + (24 - numText.height) / 2;
+  numText.x = 10 + (badgeSize - numText.width) / 2;
+  numText.y = 10 + (badgeSize - numText.height) / 2;
 
-  // ── 备注内容文字 ──
+  // ── 备注内容文字（字号用配置） ──
   const contentText = figma.createText();
   contentText.name = 'popupContent';
   contentText.characters = note.length > 120 ? note.substring(0, 120) + '…' : note;
-  contentText.fontSize = 12;
+  contentText.fontSize = config.fontSize;
   contentText.fontName = { family: 'Inter', style: 'Regular' };
   contentText.fills = [{ type: 'SOLID', color: { r: 0.102, g: 0.102, b: 0.102 } }];
   contentText.x = 44;
   contentText.y = 16;
-  contentText.lineHeight = { value: 18, unit: 'PIXELS' };
+  contentText.lineHeight = { value: config.fontSize + 6, unit: 'PIXELS' };
 
   // ── 关闭按钮 ──
   const closeText = figma.createText();
@@ -1430,14 +1632,13 @@ async function createPopupFrame(
   closeText.fontName = { family: 'Inter', style: 'Regular' };
   closeText.fills = [{ type: 'SOLID', color: { r: 0.533, g: 0.533, b: 0.533 } }];
 
-  // ── 组装与尺寸 ──
+  // ── 组装与尺寸（内容宽度 = 每行字符数 × 标准字符宽） ──
   frame.appendChild(badge);
   frame.appendChild(numText);
   frame.appendChild(contentText);
   frame.appendChild(closeText);
 
-  // 内容区域最大宽度 240，整体最小宽度 220
-  const contentW = Math.min(Math.max(contentText.width, 160), 240);
+  const contentW = config.charsPerLine * CHAR_WIDTH;
   contentText.resize(contentW, contentText.height);
   const frameW = 44 + contentW + 24;
   const frameH = Math.max(44, contentText.y + contentText.height + 16);
@@ -1504,6 +1705,14 @@ function removePopupForcefully(annotationId: string): void {
 // ══════════════════════════════════════════════
 // 生命周期
 // ══════════════════════════════════════════════
+
+// 页面切换时重新同步列表和备份（跨页时编号点列表应跟随当前页）
+figma.on('currentpagechange', () => {
+  console.log('[编号标注] 页面切换，重新同步');
+  syncAllAnnotations();
+  backupAllAnnotations();
+  cleanupOrphanPopups();
+});
 
 // 关闭插件时清理所有浮窗
 figma.on('close', () => {

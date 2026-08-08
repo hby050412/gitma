@@ -6,9 +6,10 @@
   <title>编号标注</title>
   <style>
     /* ═══════════════════════════════════════
-       全局重置 & 变量
+       设计变量
        ═══════════════════════════════════════ */
     :root {
+      /* 主色 */
       --blue: #4A90D9;
       --blue-hover: #3A7BC8;
       --blue-light: #EBF2FB;
@@ -19,11 +20,22 @@
       --text-secondary: #888888;
       --disabled: #C0C4CC;
       --danger: #E8553D;
+      --danger-bg: #FDE8E5;
+
+      /* 圆角体系 */
       --radius-sm: 6px;
-      --radius-md: 8px;
-      --radius-lg: 12px;
-      --shadow-sm: 0 2px 12px rgba(0,0,0,0.10);
-      --shadow-md: 0 4px 16px rgba(0,0,0,0.12);
+      --radius-md: 10px;
+      --radius-lg: 14px;
+
+      /* 阴影层次 */
+      --shadow-sm: 0 1px 4px rgba(0,0,0,0.06);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.10);
+      --shadow-lg: 0 8px 24px rgba(0,0,0,0.14);
+
+      /* 过渡 */
+      --t-fast: 0.12s;
+      --t-normal: 0.2s;
+
       --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
@@ -49,12 +61,13 @@
       justify-content: center;
       background: var(--white);
       border-radius: var(--radius-lg);
-      box-shadow: var(--shadow-sm);
+      box-shadow: var(--shadow-md);
       cursor: pointer;
-      transition: box-shadow 0.2s;
+      transition: box-shadow var(--t-normal), transform var(--t-normal);
     }
     .badge:hover {
-      box-shadow: var(--shadow-md);
+      box-shadow: var(--shadow-lg);
+      transform: scale(1.05);
     }
     .badge-icon {
       font-size: 22px;
@@ -70,25 +83,38 @@
       height: 100vh;
     }
 
-    /* 标题栏 */
+    /* ── 标题栏 ── */
     .panel-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      height: 44px;
+      height: 46px;
       padding: 0 16px;
-      background: var(--white);
+      background: linear-gradient(180deg, #FFFFFF, #FAFBFC);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
     .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       font-size: 13px;
       font-weight: 600;
       color: var(--text);
     }
+    .panel-title-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 7px;
+      background: var(--blue-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
     .btn-collapse {
       background: none;
-      border: 1px solid var(--border);
+      border: 1px solid transparent;
       color: var(--text-secondary);
       font-size: 16px;
       cursor: pointer;
@@ -98,93 +124,313 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.15s;
+      transition: all var(--t-fast);
     }
     .btn-collapse:hover {
       background: var(--bg);
+      color: var(--text);
+      border-color: var(--border);
     }
 
-    /* 工具栏 */
+    /* ── 工具栏 ── */
     .toolbar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      height: 40px;
-      padding: 0 16px;
+      gap: 6px;
+      padding: 8px 12px;
       background: var(--white);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+      flex-wrap: wrap;
     }
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .toolbar-divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border);
+      margin: 0 2px;
+    }
+
     .btn {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      height: 28px;
-      padding: 0 10px;
+      gap: 5px;
+      height: 30px;
+      padding: 0 12px;
       border: none;
       border-radius: var(--radius-sm);
       font-size: 12px;
       font-weight: 500;
       font-family: var(--font);
       cursor: pointer;
-      transition: background 0.15s;
+      transition: all var(--t-fast);
       white-space: nowrap;
+    }
+    .btn:active {
+      transform: scale(0.97);
     }
     .btn-primary {
       background: var(--blue);
       color: var(--white);
+      box-shadow: 0 1px 3px rgba(74, 144, 217, 0.3);
     }
     .btn-primary:hover {
       background: var(--blue-hover);
+      box-shadow: 0 2px 6px rgba(74, 144, 217, 0.4);
     }
     .btn-secondary {
       background: var(--bg);
       color: var(--text);
+      border: 1px solid transparent;
     }
     .btn-secondary:hover {
-      background: var(--border);
+      background: var(--blue-light);
+      color: var(--blue);
+      border-color: var(--blue-light);
     }
 
-    /* 备注列表 */
-    .note-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 12px 16px;
+    /* ── 设置控件 ── */
+    .tool-control {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 30px;
+      padding: 0 6px;
       background: var(--bg);
+      border-radius: var(--radius-sm);
+      transition: background var(--t-fast);
     }
-    .note-list-empty {
+    .tool-control:hover {
+      background: #EDEFF3;
+    }
+    .tool-control-label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .color-btn {
+      width: 22px;
+      height: 22px;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      padding: 0;
+      background: transparent;
       display: flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .color-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: inset 0 0 0 2px var(--white), 0 1px 3px rgba(0,0,0,0.25);
+      transition: transform var(--t-fast);
+    }
+    .color-btn:hover .color-dot {
+      transform: scale(1.15);
+    }
+    .color-palette {
+      display: none;
+      position: absolute;
+      top: 34px;
+      left: 0;
+      z-index: 200;
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      padding: 10px;
+    }
+    .color-palette.open {
+      display: block;
+      animation: popIn 0.15s ease;
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .palette-swatches {
+      display: grid;
+      grid-template-columns: repeat(6, 24px);
+      gap: 7px;
+    }
+    .swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: transform var(--t-fast), border-color var(--t-fast);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+    }
+    .swatch:hover {
+      transform: scale(1.18);
+      border-color: var(--text-secondary);
+    }
+    .swatch.active {
+      border-color: var(--text);
+      transform: scale(1.1);
+    }
+
+    .num-input {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .num-input input {
+      width: 30px;
+      border: none;
+      background: transparent;
+      font-size: 11px;
+      font-family: var(--font);
+      color: var(--text);
+      text-align: center;
+      outline: none;
+    }
+    .num-input input::-webkit-outer-spin-button,
+    .num-input input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+    }
+    .num-input button {
+      width: 16px;
+      height: 16px;
+      border: none;
+      background: transparent;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: all var(--t-fast);
+    }
+    .num-input button:hover {
+      color: var(--blue);
+      background: var(--white);
+      box-shadow: var(--shadow-sm);
+    }
+    .tool-select {
+      height: 26px;
+      border: none;
+      background: transparent;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      font-family: var(--font);
+      color: var(--text);
+      padding: 0 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .tool-select:hover {
+      color: var(--blue);
+    }
+
+    /* ── 备注列表 ── */
+    .note-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 12px 16px;
+      background: var(--bg);
+    }
+    .note-list::-webkit-scrollbar {
+      width: 5px;
+    }
+    .note-list::-webkit-scrollbar-thumb {
+      background: #D3D8DE;
+      border-radius: 4px;
+    }
+    .note-list::-webkit-scrollbar-thumb:hover {
+      background: var(--disabled);
+    }
+    .note-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .note-list-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
       height: 100%;
+      gap: 10px;
       color: var(--text-secondary);
       font-size: 12px;
     }
+    .empty-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: var(--white);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+    .empty-title {
+      font-weight: 500;
+      color: var(--text);
+    }
+    .empty-hint {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
 
-    /* 备注卡片 */
+    /* ── 备注卡片 ── */
     .note-card {
       background: var(--white);
-      border-radius: var(--radius-sm);
-      margin-bottom: 8px;
+      border-radius: var(--radius-md);
+      margin-bottom: 10px;
       border: 1px solid var(--border);
-      transition: border-color 0.15s;
+      box-shadow: var(--shadow-sm);
+      transition: all var(--t-normal);
+      position: relative;
+      overflow: hidden;
+    }
+    .note-card::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--blue);
+      opacity: 0;
+      transition: opacity var(--t-normal);
     }
     .note-card:hover {
-      border-color: var(--blue-light);
+      border-color: #D8E4F5;
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
     }
     .note-card.selected {
       border-color: var(--blue);
-      border-left: 3px solid var(--blue);
+      box-shadow: 0 0 0 1px rgba(74,144,217,0.15), var(--shadow-md);
     }
+    .note-card.selected::before {
+      opacity: 1;
+    }
+
     .note-card-header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 12px 0;
+      gap: 10px;
+      padding: 12px 12px 0;
     }
     .note-number {
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       border-radius: 50%;
       background: var(--blue);
       color: var(--white);
@@ -194,9 +440,11 @@
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
+      box-shadow: 0 1px 3px rgba(74, 144, 217, 0.35);
     }
     .note-number.locked {
       background: var(--disabled);
+      box-shadow: none;
     }
     .note-title {
       font-size: 12px;
@@ -208,8 +456,26 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .note-title.empty {
+      color: var(--text-secondary);
+      font-weight: 400;
+    }
+    .note-status-tag {
+      font-size: 10px;
+      color: var(--text-secondary);
+      background: var(--bg);
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .note-status-tag.linked {
+      color: var(--blue);
+      background: var(--blue-light);
+    }
+
     .note-card-body {
-      padding: 6px 12px 10px 40px;
+      padding: 8px 12px 0 44px;
     }
     .note-textarea {
       width: 100%;
@@ -224,10 +490,16 @@
       resize: none;
       overflow: hidden;
       outline: none;
-      transition: border-color 0.15s;
+      background: #FAFBFC;
+      transition: all var(--t-normal);
+    }
+    .note-textarea:hover {
+      border-color: #D3D8DE;
     }
     .note-textarea:focus {
       border-color: var(--blue);
+      background: var(--white);
+      box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.12);
     }
     .note-textarea::placeholder {
       color: var(--text-secondary);
@@ -236,12 +508,14 @@
     /* 卡片操作按钮 */
     .note-card-actions {
       display: flex;
-      gap: 4px;
-      padding: 0 12px 10px 40px;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px 10px 44px;
+      flex-wrap: wrap;
     }
     .btn-sm {
       height: 24px;
-      padding: 0 8px;
+      padding: 0 9px;
       font-size: 11px;
       font-weight: 400;
       border: none;
@@ -250,22 +524,28 @@
       font-family: var(--font);
       background: var(--bg);
       color: var(--text-secondary);
-      transition: all 0.15s;
+      transition: all var(--t-fast);
       display: inline-flex;
       align-items: center;
-      gap: 3px;
+      gap: 4px;
     }
     .btn-sm:hover {
-      background: var(--border);
-      color: var(--text);
+      background: var(--blue-light);
+      color: var(--blue);
+    }
+    .btn-sm:active {
+      transform: scale(0.96);
     }
     .btn-sm.danger:hover {
-      background: #FDE8E5;
+      background: var(--danger-bg);
       color: var(--danger);
+    }
+    .actions-spacer {
+      flex: 1;
     }
 
     /* ═══════════════════════════════════════
-       覆盖层（放置 / 关联模式）
+       覆盖层（关联模式）
        ═══════════════════════════════════════ */
     .overlay {
       position: fixed;
@@ -285,14 +565,14 @@
       transform: translateX(-50%);
       background: var(--blue);
       color: var(--white);
-      padding: 10px 20px;
+      padding: 11px 22px;
       border-radius: var(--radius-md);
       font-size: 13px;
       font-weight: 500;
-      box-shadow: var(--shadow-md);
+      box-shadow: var(--shadow-lg);
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 18px;
       user-select: none;
       white-space: nowrap;
       z-index: 10000;
@@ -303,17 +583,22 @@
       font-weight: 400;
     }
 
-    /* 状态提示 */
+    /* ── 状态栏 ── */
     .status-bar {
-      height: 28px;
+      height: 30px;
       padding: 0 16px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       font-size: 11px;
       color: var(--text-secondary);
       background: var(--white);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
+    }
+    .status-count {
+      font-weight: 500;
+      color: var(--blue);
     }
   </style>
 </head>
@@ -332,33 +617,89 @@
   <div class="panel" id="panel">
     <!-- 标题栏 -->
     <div class="panel-header">
-      <span class="panel-title">📋 编号标注</span>
+      <span class="panel-title">
+        <span class="panel-title-icon">📍</span>
+        编号标注
+      </span>
       <button class="btn-collapse" id="btnCollapse" title="收起">━</button>
     </div>
 
     <!-- 工具栏 -->
     <div class="toolbar">
-      <button class="btn btn-primary" id="btnAdd">+ 添加</button>
-      <button class="btn btn-secondary" id="btnLockToggle">
-        <span id="lockIcon">🔓</span> 锁定
-      </button>
+      <div class="toolbar-group">
+        <button class="btn btn-primary" id="btnAdd">＋ 添加</button>
+        <button class="btn btn-secondary" id="btnLockToggle">
+          <span id="lockIcon">🔓</span> 锁定
+        </button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <!-- 颜色 -->
+        <div class="tool-control" title="编号点颜色">
+          <button class="color-btn" id="btnColor">
+            <span class="color-dot" id="colorDot"></span>
+          </button>
+          <div class="color-palette" id="colorPalette">
+            <div class="palette-swatches" id="swatches"></div>
+          </div>
+        </div>
+
+        <!-- 尺寸 -->
+        <div class="tool-control" title="编号点尺寸 (px)">
+          <span class="tool-control-label">尺寸</span>
+          <div class="num-input">
+            <button id="sizeMinus">−</button>
+            <input type="number" id="sizeInput" min="12" max="60" />
+            <button id="sizePlus">+</button>
+          </div>
+        </div>
+
+        <!-- 备注每行字符数 -->
+        <div class="tool-control" title="备注区域每行字符数">
+          <span class="tool-control-label">行字</span>
+          <div class="num-input">
+            <button id="charsMinus">−</button>
+            <input type="number" id="charsInput" min="8" max="60" />
+            <button id="charsPlus">+</button>
+          </div>
+        </div>
+
+        <!-- 备注字号 -->
+        <div class="tool-control" title="备注文字字号">
+          <span class="tool-control-label">字号</span>
+          <select class="tool-select" id="fontSizeSelect">
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12" selected>12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+          </select>
+        </div>
+      </div>
     </div>
 
     <!-- 备注列表 -->
     <div class="note-list" id="noteList">
       <div class="note-list-empty" id="emptyHint">
-        暂无标注，点击「+ 添加」开始
+        <div class="empty-icon">📍</div>
+        <div class="empty-title">暂无标注</div>
+        <div class="empty-hint">选中图层后点击「＋ 添加」开始</div>
       </div>
     </div>
 
     <!-- 状态栏 -->
     <div class="status-bar" id="statusBar">
-      标注数量: 0
+      <span>标注数量: <span class="status-count">0</span></span>
+      <span>━ 收起</span>
     </div>
   </div>
 
   <!-- ═══════════════════════════════════════
-      覆盖层（放置 / 关联模式，全屏）
+      覆盖层（关联模式，全屏）
       ═══════════════════════════════════════ -->
   <div class="overlay" id="overlay">
     <div class="overlay-banner" id="overlayBanner">
@@ -377,6 +718,25 @@
     let selectedAnnotationId = null; // 当前选中的编号点 ID
     let editingAnnotationId = null;  // 当前正在编辑输入的卡片 ID
 
+    // 全局配置（颜色/尺寸/备注区域）
+    let config = { color: '#4A90D9', size: 24, charsPerLine: 20, fontSize: 12 };
+
+    // 预设色板（与 Figma 常用标注色一致）
+    const PALETTE = [
+      { name: '科技蓝', hex: '#4A90D9' },
+      { name: '亮蓝', hex: '#3388FF' },
+      { name: '青色', hex: '#00B8C4' },
+      { name: '绿色', hex: '#3CB371' },
+      { name: '橙色', hex: '#F5A623' },
+      { name: '红色', hex: '#E8553D' },
+      { name: '紫色', hex: '#8B5CF6' },
+      { name: '粉色', hex: '#EC4899' },
+      { name: '棕色', hex: '#8B5E3C' },
+      { name: '灰色', hex: '#8899AA' },
+      { name: '深蓝', hex: '#1E3A5F' },
+      { name: '黑色', hex: '#333333' },
+    ];
+
     // ── DOM 引用 ──
     const badge = document.getElementById('badge');
     const panel = document.getElementById('panel');
@@ -388,6 +748,17 @@
     const statusBar = document.getElementById('statusBar');
     const overlay = document.getElementById('overlay');
     const overlayText = document.getElementById('overlayText');
+    const btnColor = document.getElementById('btnColor');
+    const colorDot = document.getElementById('colorDot');
+    const colorPalette = document.getElementById('colorPalette');
+    const swatches = document.getElementById('swatches');
+    const sizeInput = document.getElementById('sizeInput');
+    const sizeMinus = document.getElementById('sizeMinus');
+    const sizePlus = document.getElementById('sizePlus');
+    const charsInput = document.getElementById('charsInput');
+    const charsMinus = document.getElementById('charsMinus');
+    const charsPlus = document.getElementById('charsPlus');
+    const fontSizeSelect = document.getElementById('fontSizeSelect');
 
     // 覆盖层模式: null | 'linking'
     let overlayMode = null;
@@ -418,11 +789,19 @@
           enterOverlayMode();
           break;
         case 'init':
-          // 初始化数据
+          // 初始化数据（正在编辑输入时不重渲染，避免输入法中断）
           if (msg.annotations) {
             annotations = msg.annotations;
-            renderNoteList();
+            if (editingAnnotationId === null) {
+              renderNoteList();
+            }
           }
+          if (msg.config) {
+            applyConfigFromCode(msg.config);
+          }
+          break;
+        case 'config-updated':
+          applyConfigFromCode(msg.config);
           break;
         case 'annotation-added':
           annotations.push(msg.annotation);
@@ -527,12 +906,135 @@
       }
     };
 
+    // ── 全局配置控件（颜色/尺寸/备注区域） ──
+    // hex → RGB 对象（Figma 0-1 范围）
+    function hexToRgb(hex) {
+      const h = hex.replace('#', '');
+      return {
+        r: parseInt(h.substring(0, 2), 16) / 255,
+        g: parseInt(h.substring(2, 4), 16) / 255,
+        b: parseInt(h.substring(4, 6), 16) / 255,
+      };
+    }
+
+    // 发送配置更新
+    function sendConfigUpdate() {
+      sendToCode({
+        type: 'update-config',
+        config: {
+          color: hexToRgb(config.color),
+          size: config.size,
+          charsPerLine: config.charsPerLine,
+          fontSize: config.fontSize,
+        },
+      });
+    }
+
+    // 沙箱配置 → UI 显示（RGB → hex）
+    function applyConfigFromCode(cfg) {
+      if (!cfg) return;
+      const toHex = (v) =>
+        Math.round(v * 255).toString(16).padStart(2, '0');
+      config = {
+        color: cfg.color ? `#${toHex(cfg.color.r)}${toHex(cfg.color.g)}${toHex(cfg.color.b)}` : config.color,
+        size: cfg.size ?? config.size,
+        charsPerLine: cfg.charsPerLine ?? config.charsPerLine,
+        fontSize: cfg.fontSize ?? config.fontSize,
+      };
+      syncConfigControls();
+    }
+
+    // 同步控件显示
+    function syncConfigControls() {
+      colorDot.style.background = config.color;
+      sizeInput.value = config.size;
+      charsInput.value = config.charsPerLine;
+      fontSizeSelect.value = String(config.fontSize);
+      document.querySelectorAll('.swatch').forEach((el) => {
+        el.classList.toggle('active', el.dataset.hex === config.color);
+      });
+    }
+
+    // 渲染色板
+    function renderPalette() {
+      swatches.innerHTML = '';
+      PALETTE.forEach((c) => {
+        const el = document.createElement('div');
+        el.className = 'swatch';
+        el.dataset.hex = c.hex;
+        el.style.background = c.hex;
+        el.title = c.name;
+        el.onclick = (e) => {
+          e.stopPropagation();
+          config.color = c.hex;
+          syncConfigControls();
+          sendConfigUpdate();
+          colorPalette.classList.remove('open');
+        };
+        swatches.appendChild(el);
+      });
+      syncConfigControls();
+    }
+
+    // 色板开关
+    btnColor.onclick = (e) => {
+      e.stopPropagation();
+      colorPalette.classList.toggle('open');
+    };
+    document.addEventListener('click', () => {
+      colorPalette.classList.remove('open');
+    });
+
+    // 尺寸输入（±按钮 + 数字输入）
+    function adjustSize(delta) {
+      config.size = Math.min(60, Math.max(12, config.size + delta));
+      syncConfigControls();
+      sendConfigUpdate();
+    }
+    sizeMinus.onclick = () => adjustSize(-2);
+    sizePlus.onclick = () => adjustSize(2);
+    sizeInput.onchange = () => {
+      const v = parseInt(sizeInput.value, 10);
+      config.size = isNaN(v) ? 24 : Math.min(60, Math.max(12, v));
+      syncConfigControls();
+      sendConfigUpdate();
+    };
+
+    // 每行字符数（±按钮 + 数字输入）
+    function adjustChars(delta) {
+      config.charsPerLine = Math.min(60, Math.max(8, config.charsPerLine + delta));
+      syncConfigControls();
+      sendConfigUpdate();
+    }
+    charsMinus.onclick = () => adjustChars(-1);
+    charsPlus.onclick = () => adjustChars(1);
+    charsInput.onchange = () => {
+      const v = parseInt(charsInput.value, 10);
+      config.charsPerLine = isNaN(v) ? 20 : Math.min(60, Math.max(8, v));
+      syncConfigControls();
+      sendConfigUpdate();
+    };
+
+    // 备注字号
+    fontSizeSelect.onchange = () => {
+      config.fontSize = parseInt(fontSizeSelect.value, 10);
+      sendConfigUpdate();
+    };
+
+    // 渲染色板 + 同步显示
+    renderPalette();
+
     // ── 渲染 ──
     function renderNoteList() {
       noteList.innerHTML = '';
 
       if (annotations.length === 0) {
-        noteList.innerHTML = '<div class="note-list-empty">暂无标注，点击「+ 添加」开始</div>';
+        noteList.innerHTML = `
+          <div class="note-list-empty">
+            <div class="empty-icon">📍</div>
+            <div class="empty-title">暂无标注</div>
+            <div class="empty-hint">选中图层后点击「＋ 添加」开始</div>
+          </div>`;
       } else {
         annotations
           .sort((a, b) => a.order - b.order)
@@ -542,7 +1044,7 @@
           });
       }
 
-      statusBar.textContent = `标注数量: ${annotations.length}`;
+      statusBar.querySelector('.status-count').textContent = annotations.length;
     }
 
     function createNoteCard(ann) {
@@ -556,7 +1058,12 @@
       card.innerHTML = `
         <div class="note-card-header">
           <span class="note-number${ann.isLocked === 'true' ? ' locked' : ''}">${ann.order}</span>
-          <span class="note-title">${ann.note || '(未备注)'}</span>
+          <span class="note-title${ann.note ? '' : ' empty'}">${ann.note ? escapeHtml(ann.note) : '未备注'}</span>
+          ${ann.isLocked === 'true'
+            ? '<span class="note-status-tag">🔒 已锁定</span>'
+            : ann.targetNodeId
+              ? '<span class="note-status-tag linked">🔗 已关联</span>'
+              : '<span class="note-status-tag">独立</span>'}
         </div>
         <div class="note-card-body">
           <textarea class="note-textarea"
@@ -574,11 +1081,12 @@
           <button class="btn-sm" data-action="unlink" data-id="${ann.annotationId}">
             解除关联
           </button>` : ''}
-          <button class="btn-sm" data-action="delete" data-id="${ann.annotationId}">
-            🗑 删除
-          </button>
           <button class="btn-sm" data-action="locate" data-id="${ann.annotationId}">
             📍 定位
+          </button>
+          <span class="actions-spacer"></span>
+          <button class="btn-sm danger" data-action="delete" data-id="${ann.annotationId}">
+            🗑 删除
           </button>
         </div>
       `;
@@ -628,7 +1136,10 @@
         const target = annotations.find(a => a.annotationId === ann.annotationId);
         if (target) target.note = textarea.value;
         // 同步标题显示
-        if (titleEl) titleEl.textContent = textarea.value || '(未备注)';
+        if (titleEl) {
+          titleEl.textContent = textarea.value || '未备注';
+          titleEl.classList.toggle('empty', !textarea.value);
+        }
         // 自动增高
         autoGrowTextarea(textarea);
         // 防抖同步到沙箱
