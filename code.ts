@@ -110,12 +110,6 @@ let isProgrammaticMove = false;
 /** 插件 UI 是否处于展开态（面板） */
 let uiIsExpanded = false;
 
-/** 覆盖层模式：idle=无 / linking=关联图层 */
-type OverlayState = 'idle' | 'linking';
-let overlayState: OverlayState = 'idle';
-/** 关联模式下，等待被绑定/重绑定的编号点 ID */
-let pendingLinkAnnotationId = '';
-
 /** 程序化删除的节点 ID 集合（区分插件删除与用户画布删除，避免恢复被插删的编号点） */
 const programmaticDeleteIds = new Set<string>();
 
@@ -149,18 +143,6 @@ figma.ui.onmessage = (msg: { type: string; [key: string]: unknown }) => {
       break;
     case 'add-annotation':
       handleAddAnnotation();
-      break;
-    case 'link-annotation':
-      enterOverlay('linking', msg.annotationId as string);
-      break;
-    case 'unlink-annotation':
-      unlinkAnnotation(msg.annotationId as string);
-      break;
-    case 'link-to':
-      handleLinkTo(msg.screenX as number, msg.screenY as number);
-      break;
-    case 'cancel-overlay':
-      exitOverlay();
       break;
     case 'update-config':
       handleUpdateConfig(msg.config as PluginConfig);
@@ -572,68 +554,12 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 }
 
 // ══════════════════════════════════════════════
-// 覆盖层模式（放置 / 关联）
+// 位置自动关联（编号点在哪个图层内就跟哪个图层关联）
 // ══════════════════════════════════════════════
 
-/** 进入关联模式（全屏覆盖层，点击目标图层） */
-function enterOverlay(mode: OverlayState, annotationId?: string): void {
-  if (overlayState !== 'idle' || mode !== 'linking') return;
-
-  overlayState = 'linking';
-  pendingLinkAnnotationId = annotationId || '';
-
-  // 全屏覆盖：UI iframe 铺满视口（resize 使用屏幕像素 = 文档单位 × zoom）
-  const bounds = figma.viewport.bounds;
-  const zoom = figma.viewport.zoom;
-  figma.ui.resize(Math.round(bounds.width * zoom), Math.round(bounds.height * zoom));
-  figma.ui.postMessage({ type: 'overlay-mode', mode: 'linking' });
-}
-
-/** 退出覆盖层模式，恢复之前的面板/浮标形态 */
-function exitOverlay(): void {
-  if (overlayState === 'idle') return;
-
-  overlayState = 'idle';
-  pendingLinkAnnotationId = '';
-
-  if (uiIsExpanded) {
-    figma.ui.resize(340, 480);
-    figma.ui.postMessage({ type: 'panel-expanded' });
-  } else {
-    figma.ui.resize(48, 48);
-    figma.ui.postMessage({ type: 'panel-collapsed' });
-  }
-}
-
-/** 关联模式：将编号点绑定到点击命中的图层 */
-function handleLinkTo(screenX: number, screenY: number): void {
-  if (overlayState !== 'linking') return;
-
-  const world = screenToWorld({ x: screenX, y: screenY });
-  const hit = hitTest(world);
-
-  if (hit) {
-    bindAnnotation(pendingLinkAnnotationId, hit);
-    figma.notify(`已关联图层: ${hit.name}`);
-  } else {
-    figma.notify('点击位置没有图层，关联未生效');
-  }
-  exitOverlay();
-}
-
-/**
- * 屏幕坐标 → 画布坐标
- * viewport.bounds 的 (x, y) 是可见视口左上角的画布坐标，
- * bounds 宽高是文档单位：世界坐标 = bounds 左上角 + 屏幕偏移 / zoom
- */
-function screenToWorld(screen: { x: number; y: number }): { x: number; y: number } {
-  const bounds = figma.viewport.bounds;
-  const zoom = figma.viewport.zoom;
-  return {
-    x: bounds.x + screen.x / zoom,
-    y: bounds.y + screen.y / zoom,
-  };
-}
+/** 拖拽后自动关联的节流时间（ms） */
+const RELINK_THROTTLE = 200;
+let lastRelinkTime = 0;
 
 /** 命中检测：找到画布上位于指定点的最顶层图层 */
 function hitTest(world: { x: number; y: number }): SceneNode | null {
@@ -675,6 +601,42 @@ function hitTestNode(
   return node;
 }
 
+/**
+ * 检测编号点当前位置所在图层，自动更新关联：
+ * - 命中图层且与当前绑定不同 → 切换到新图层
+ * - 未命中任何图层 → 解除绑定（独立编号点）
+ */
+function detectAndUpdateBinding(marker: GroupNode): void {
+  const now = Date.now();
+  if (now - lastRelinkTime < RELINK_THROTTLE) return;
+  lastRelinkTime = now;
+
+  const center = {
+    x: marker.x + marker.width / 2,
+    y: marker.y + marker.height / 2,
+  };
+  const hit = hitTest(center);
+
+  const currentTargetId = marker.getPluginData(PD.targetNodeId);
+
+  if (hit) {
+    if (hit.id !== currentTargetId) {
+      bindAnnotation(marker.getPluginData(PD.annotationId), hit);
+    }
+  } else if (currentTargetId) {
+    // 拖到空白处 → 解除关联
+    removeAnnotationRef(currentTargetId, marker.getPluginData(PD.annotationId));
+    marker.setPluginData(PD.targetNodeId, '');
+    marker.setPluginData(PD.offsetX, String(Math.round(marker.x)));
+    marker.setPluginData(PD.offsetY, String(Math.round(marker.y)));
+    figma.ui.postMessage({
+      type: 'annotation-updated',
+      annotation: readAnnotationData(marker),
+    });
+    backupAllAnnotations();
+  }
+}
+
 /** 将编号点绑定到目标图层（可重复调用以重新绑定） */
 function bindAnnotation(annotationId: string, target: SceneNode): void {
   const marker = findAnnotationById(annotationId);
@@ -706,29 +668,6 @@ function bindAnnotation(annotationId: string, target: SceneNode): void {
     type: 'annotation-updated',
     annotation: readAnnotationData(marker),
   });
-
-  backupAllAnnotations();
-}
-
-/** 解除编号点与图层的关联，变为独立编号点 */
-function unlinkAnnotation(annotationId: string): void {
-  const marker = findAnnotationById(annotationId);
-  if (!marker) return;
-
-  const oldTargetId = marker.getPluginData(PD.targetNodeId);
-  if (oldTargetId) {
-    removeAnnotationRef(oldTargetId, annotationId);
-  }
-
-  marker.setPluginData(PD.targetNodeId, '');
-  marker.setPluginData(PD.offsetX, String(Math.round(marker.x)));
-  marker.setPluginData(PD.offsetY, String(Math.round(marker.y)));
-
-  figma.ui.postMessage({
-    type: 'annotation-updated',
-    annotation: readAnnotationData(marker),
-  });
-  figma.notify('已解除与图层的关联');
 
   backupAllAnnotations();
 }
@@ -1071,8 +1010,9 @@ function handleAnnotationChange(marker: GroupNode): void {
     return;
   }
 
-  // 正常拖拽 → 更新偏移量
+  // 正常拖拽 → 更新偏移量 + 自动重关联（编号点在哪个图层内就跟哪个图层关联）
   updateMarkerOffset(marker);
+  detectAndUpdateBinding(marker);
 
   // 拖拽编号点时，其临时浮窗恢复到图层右侧布局
   const popup = activePopups.get(marker.getPluginData(PD.annotationId));

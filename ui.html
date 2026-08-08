@@ -192,80 +192,90 @@
       color: var(--blue);
       border-color: var(--blue-light);
     }
-
-    /* ── 设置控件 ── */
-    .tool-control {
-      position: relative;
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      height: 30px;
-      padding: 0 6px;
-      background: var(--bg);
-      border-radius: var(--radius-sm);
-      transition: background var(--t-fast);
+    /* 有选中编号点时：蓝色描边提示可操作 */
+    .btn-secondary.has-selection {
+      border-color: var(--blue);
     }
-    .tool-control:hover {
-      background: #EDEFF3;
-    }
-    .tool-control-label {
-      font-size: 10px;
-      color: var(--text-secondary);
-      white-space: nowrap;
-    }
-    .color-btn {
-      width: 22px;
-      height: 22px;
-      border: none;
-      border-radius: 50%;
-      cursor: pointer;
-      padding: 0;
-      background: transparent;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      position: relative;
-    }
-    .color-dot {
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
+    /* 选中的编号点已锁定：实心高亮 */
+    .btn-secondary.active {
       background: var(--blue);
-      box-shadow: inset 0 0 0 2px var(--white), 0 1px 3px rgba(0,0,0,0.25);
-      transition: transform var(--t-fast);
+      color: var(--white);
+      border-color: var(--blue);
     }
-    .color-btn:hover .color-dot {
-      transform: scale(1.15);
+    .btn-secondary.active:hover {
+      background: var(--blue-hover);
+      color: var(--white);
     }
-    .color-palette {
+
+    /* ── 设置面板（弹出） ── */
+    .settings-panel {
       display: none;
       position: absolute;
-      top: 34px;
-      left: 0;
-      z-index: 200;
+      top: 92px;
+      left: 12px;
+      right: 12px;
+      z-index: 150;
       background: var(--white);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       box-shadow: var(--shadow-lg);
-      padding: 10px;
+      padding: 12px;
     }
-    .color-palette.open {
+    .settings-panel.open {
       display: block;
-      animation: popIn 0.15s ease;
+      animation: slideDown 0.18s ease;
     }
-    @keyframes popIn {
-      from { opacity: 0; transform: translateY(-4px) scale(0.97); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .settings-section {
+      margin-bottom: 12px;
+    }
+    .settings-section:last-child {
+      margin-bottom: 0;
+    }
+    .settings-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--blue);
+      margin-bottom: 8px;
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .settings-row:last-child {
+      margin-bottom: 0;
+    }
+    .settings-label {
+      width: 40px;
+      font-size: 12px;
+      color: var(--text);
+      flex-shrink: 0;
+    }
+    .settings-num {
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      padding: 3px 6px;
+      height: 26px;
+    }
+    .settings-select {
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      height: 26px;
+      padding: 0 6px;
     }
     .palette-swatches {
       display: grid;
-      grid-template-columns: repeat(6, 24px);
-      gap: 7px;
+      grid-template-columns: repeat(6, 26px);
+      gap: 6px;
     }
     .swatch {
-      width: 24px;
-      height: 24px;
+      width: 26px;
+      height: 26px;
       border-radius: 7px;
       cursor: pointer;
       border: 2px solid transparent;
@@ -273,12 +283,12 @@
       box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
     }
     .swatch:hover {
-      transform: scale(1.18);
+      transform: scale(1.15);
       border-color: var(--text-secondary);
     }
     .swatch.active {
       border-color: var(--text);
-      transform: scale(1.1);
+      transform: scale(1.08);
     }
 
     .num-input {
@@ -320,6 +330,11 @@
       color: var(--blue);
       background: var(--white);
       box-shadow: var(--shadow-sm);
+    }
+    .num-unit {
+      font-size: 10px;
+      color: var(--text-secondary);
+      margin-left: 1px;
     }
     .tool-select {
       height: 26px;
@@ -544,45 +559,6 @@
       flex: 1;
     }
 
-    /* ═══════════════════════════════════════
-       覆盖层（关联模式）
-       ═══════════════════════════════════════ */
-    .overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(74, 144, 217, 0.06);
-      display: none;
-      cursor: crosshair;
-      z-index: 9999;
-    }
-    .overlay.active {
-      display: block;
-    }
-    .overlay-banner {
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--blue);
-      color: var(--white);
-      padding: 11px 22px;
-      border-radius: var(--radius-md);
-      font-size: 13px;
-      font-weight: 500;
-      box-shadow: var(--shadow-lg);
-      display: flex;
-      align-items: center;
-      gap: 18px;
-      user-select: none;
-      white-space: nowrap;
-      z-index: 10000;
-    }
-    .overlay-hint {
-      opacity: 0.85;
-      font-size: 11px;
-      font-weight: 400;
-    }
-
     /* ── 状态栏 ── */
     .status-bar {
       height: 30px;
@@ -627,49 +603,52 @@
     <!-- 工具栏 -->
     <div class="toolbar">
       <div class="toolbar-group">
-        <button class="btn btn-primary" id="btnAdd">＋ 添加</button>
-        <button class="btn btn-secondary" id="btnLockToggle">
+        <button class="btn btn-primary" id="btnAdd" title="在选中图层左上角添加编号点">＋ 添加</button>
+        <button class="btn btn-secondary" id="btnLockToggle" title="锁定/解锁选中的编号点">
           <span id="lockIcon">🔓</span> 锁定
         </button>
       </div>
 
       <div class="toolbar-divider"></div>
 
-      <div class="toolbar-group">
-        <!-- 颜色 -->
-        <div class="tool-control" title="编号点颜色">
-          <button class="color-btn" id="btnColor">
-            <span class="color-dot" id="colorDot"></span>
-          </button>
-          <div class="color-palette" id="colorPalette">
-            <div class="palette-swatches" id="swatches"></div>
-          </div>
-        </div>
+      <button class="btn btn-secondary" id="btnSettings" title="编号点样式与备注浮窗设置">
+        ⚙ 设置
+      </button>
+    </div>
 
-        <!-- 尺寸 -->
-        <div class="tool-control" title="编号点尺寸 (px)">
-          <span class="tool-control-label">尺寸</span>
-          <div class="num-input">
+    <!-- 设置面板（弹出） -->
+    <div class="settings-panel" id="settingsPanel">
+      <div class="settings-section">
+        <div class="settings-section-title">🎨 编号点样式</div>
+        <div class="settings-row">
+          <span class="settings-label">颜色</span>
+          <div class="palette-swatches" id="swatches"></div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">大小</span>
+          <div class="num-input settings-num">
             <button id="sizeMinus">−</button>
             <input type="number" id="sizeInput" min="12" max="60" />
             <button id="sizePlus">+</button>
+            <span class="num-unit">px</span>
           </div>
         </div>
+      </div>
 
-        <!-- 备注每行字符数 -->
-        <div class="tool-control" title="备注区域每行字符数">
-          <span class="tool-control-label">行字</span>
-          <div class="num-input">
+      <div class="settings-section">
+        <div class="settings-section-title">📏 备注浮窗</div>
+        <div class="settings-row">
+          <span class="settings-label">长度</span>
+          <div class="num-input settings-num">
             <button id="charsMinus">−</button>
             <input type="number" id="charsInput" min="8" max="60" />
             <button id="charsPlus">+</button>
+            <span class="num-unit">字/行</span>
           </div>
         </div>
-
-        <!-- 备注字号 -->
-        <div class="tool-control" title="备注文字字号">
-          <span class="tool-control-label">字号</span>
-          <select class="tool-select" id="fontSizeSelect">
+        <div class="settings-row">
+          <span class="settings-label">字号</span>
+          <select class="tool-select settings-select" id="fontSizeSelect">
             <option value="10">10</option>
             <option value="11">11</option>
             <option value="12" selected>12</option>
@@ -694,17 +673,7 @@
     <!-- 状态栏 -->
     <div class="status-bar" id="statusBar">
       <span>标注数量: <span class="status-count">0</span></span>
-      <span>━ 收起</span>
-    </div>
-  </div>
-
-  <!-- ═══════════════════════════════════════
-      覆盖层（关联模式，全屏）
-      ═══════════════════════════════════════ -->
-  <div class="overlay" id="overlay">
-    <div class="overlay-banner" id="overlayBanner">
-      <span id="overlayText">点击要关联的图层</span>
-      <span class="overlay-hint">Esc / 右键取消</span>
+      <span class="status-hint">━ 收起</span>
     </div>
   </div>
 
@@ -743,14 +712,11 @@
     const btnCollapse = document.getElementById('btnCollapse');
     const btnAdd = document.getElementById('btnAdd');
     const btnLockToggle = document.getElementById('btnLockToggle');
+    const btnSettings = document.getElementById('btnSettings');
+    const settingsPanel = document.getElementById('settingsPanel');
     const noteList = document.getElementById('noteList');
     const emptyHint = document.getElementById('emptyHint');
     const statusBar = document.getElementById('statusBar');
-    const overlay = document.getElementById('overlay');
-    const overlayText = document.getElementById('overlayText');
-    const btnColor = document.getElementById('btnColor');
-    const colorDot = document.getElementById('colorDot');
-    const colorPalette = document.getElementById('colorPalette');
     const swatches = document.getElementById('swatches');
     const sizeInput = document.getElementById('sizeInput');
     const sizeMinus = document.getElementById('sizeMinus');
@@ -759,9 +725,6 @@
     const charsMinus = document.getElementById('charsMinus');
     const charsPlus = document.getElementById('charsPlus');
     const fontSizeSelect = document.getElementById('fontSizeSelect');
-
-    // 覆盖层模式: null | 'linking'
-    let overlayMode = null;
 
     // ── 通信 ──
     function sendToCode(msg) {
@@ -778,15 +741,10 @@
       switch (msg.type) {
         case 'panel-expanded':
           // 沙箱已调整到展开尺寸，切换 UI
-          exitOverlayMode();
           switchToPanel();
           break;
         case 'panel-collapsed':
-          exitOverlayMode();
           switchToBadge();
-          break;
-        case 'overlay-mode':
-          enterOverlayMode();
           break;
         case 'init':
           // 初始化数据（正在编辑输入时不重渲染，避免输入法中断）
@@ -813,6 +771,7 @@
             selectedAnnotationId = null;
           }
           renderNoteList();
+          updateLockButton();
           break;
         case 'annotation-updated':
           const idx = annotations.findIndex(a => a.annotationId === msg.annotation.annotationId);
@@ -823,6 +782,7 @@
               renderNoteList();
             }
           }
+          updateLockButton();
           break;
         case 'annotations-renumbered':
           annotations = msg.annotations;
@@ -831,6 +791,7 @@
         case 'annotation-selected':
           selectedAnnotationId = msg.annotationId;
           highlightSelectedCard();
+          updateLockButton();
           break;
         default:
           console.log('[ui] 未处理的消息:', msg.type);
@@ -850,43 +811,6 @@
       panel.style.display = 'flex';
     }
 
-    // ── 覆盖层模式（关联图层） ──
-    function enterOverlayMode() {
-      overlayMode = 'linking';
-      overlayText.textContent = '点击要关联的图层';
-      overlay.classList.add('active');
-    }
-
-    function exitOverlayMode() {
-      overlayMode = null;
-      overlay.classList.remove('active');
-    }
-
-    // 覆盖层点击 → 发送屏幕坐标
-    overlay.onclick = (e) => {
-      if (!overlayMode) return;
-      sendToCode({
-        type: 'link-to',
-        screenX: e.clientX,
-        screenY: e.clientY,
-      });
-    };
-
-    // 右键取消
-    overlay.oncontextmenu = (e) => {
-      e.preventDefault();
-      if (overlayMode) {
-        sendToCode({ type: 'cancel-overlay' });
-      }
-    };
-
-    // Esc 取消
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && overlayMode) {
-        sendToCode({ type: 'cancel-overlay' });
-      }
-    });
-
     // ── 事件 ──
     badge.onclick = () => {
       sendToCode({ type: 'badge-clicked' });
@@ -903,8 +827,31 @@
     btnLockToggle.onclick = () => {
       if (selectedAnnotationId) {
         sendToCode({ type: 'toggle-lock', annotationId: selectedAnnotationId });
+      } else {
+        showStatusHint('请先在画布上选中要锁定的编号点');
       }
     };
+
+    // 状态栏临时提示
+    let statusHintTimer = null;
+    function showStatusHint(text) {
+      const hintEl = statusBar.querySelector('.status-hint');
+      if (!hintEl) return;
+      hintEl.textContent = text;
+      clearTimeout(statusHintTimer);
+      statusHintTimer = setTimeout(() => {
+        hintEl.textContent = '━ 收起';
+      }, 2500);
+    }
+
+    // 根据选中编号点的锁定状态更新锁定按钮
+    function updateLockButton() {
+      const ann = annotations.find(a => a.annotationId === selectedAnnotationId);
+      const locked = !!ann && ann.isLocked === 'true';
+      btnLockToggle.querySelector('#lockIcon').textContent = locked ? '🔒' : '🔓';
+      btnLockToggle.classList.toggle('active', !!ann && locked);
+      btnLockToggle.classList.toggle('has-selection', !!ann);
+    }
 
     // ── 全局配置控件（颜色/尺寸/备注区域） ──
     // hex → RGB 对象（Figma 0-1 范围）
@@ -946,7 +893,6 @@
 
     // 同步控件显示
     function syncConfigControls() {
-      colorDot.style.background = config.color;
       sizeInput.value = config.size;
       charsInput.value = config.charsPerLine;
       fontSizeSelect.value = String(config.fontSize);
@@ -969,20 +915,21 @@
           config.color = c.hex;
           syncConfigControls();
           sendConfigUpdate();
-          colorPalette.classList.remove('open');
         };
         swatches.appendChild(el);
       });
       syncConfigControls();
     }
 
-    // 色板开关
-    btnColor.onclick = (e) => {
+    // 设置面板开关（点击面板外关闭）
+    btnSettings.onclick = (e) => {
       e.stopPropagation();
-      colorPalette.classList.toggle('open');
+      settingsPanel.classList.toggle('open');
     };
-    document.addEventListener('click', () => {
-      colorPalette.classList.remove('open');
+    document.addEventListener('click', (e) => {
+      if (!settingsPanel.contains(e.target)) {
+        settingsPanel.classList.remove('open');
+      }
     });
 
     // 尺寸输入（±按钮 + 数字输入）
@@ -1074,13 +1021,6 @@
           <button class="btn-sm" data-action="lock" data-id="${ann.annotationId}">
             ${ann.isLocked === 'true' ? '🔒 解锁' : '🔓 锁定'}
           </button>
-          <button class="btn-sm" data-action="link" data-id="${ann.annotationId}">
-            🔗 ${ann.targetNodeId ? '改关联' : '关联'}
-          </button>
-          ${ann.targetNodeId ? `
-          <button class="btn-sm" data-action="unlink" data-id="${ann.annotationId}">
-            解除关联
-          </button>` : ''}
           <button class="btn-sm" data-action="locate" data-id="${ann.annotationId}">
             📍 定位
           </button>
@@ -1108,18 +1048,6 @@
       card.querySelector('[data-action="locate"]').onclick = () => {
         sendToCode({ type: 'locate-annotation', annotationId: ann.annotationId });
       };
-      const linkBtn = card.querySelector('[data-action="link"]');
-      if (linkBtn) {
-        linkBtn.onclick = () => {
-          sendToCode({ type: 'link-annotation', annotationId: ann.annotationId });
-        };
-      }
-      const unlinkBtn = card.querySelector('[data-action="unlink"]');
-      if (unlinkBtn) {
-        unlinkBtn.onclick = () => {
-          sendToCode({ type: 'unlink-annotation', annotationId: ann.annotationId });
-        };
-      }
 
       // 文本编辑（防抖同步 + 自动增高 + 编辑中不重渲染）
       const textarea = card.querySelector('.note-textarea');
