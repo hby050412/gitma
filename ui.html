@@ -262,6 +262,45 @@
       color: var(--danger);
     }
 
+    /* ═══════════════════════════════════════
+       覆盖层（放置 / 关联模式）
+       ═══════════════════════════════════════ */
+    .overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(74, 144, 217, 0.06);
+      display: none;
+      cursor: crosshair;
+      z-index: 9999;
+    }
+    .overlay.active {
+      display: block;
+    }
+    .overlay-banner {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--blue);
+      color: var(--white);
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: var(--shadow-md);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      user-select: none;
+      white-space: nowrap;
+      z-index: 10000;
+    }
+    .overlay-hint {
+      opacity: 0.85;
+      font-size: 11px;
+      font-weight: 400;
+    }
+
     /* 状态提示 */
     .status-bar {
       height: 28px;
@@ -317,6 +356,16 @@
   </div>
 
   <!-- ═══════════════════════════════════════
+      覆盖层（放置 / 关联模式，全屏）
+      ═══════════════════════════════════════ -->
+  <div class="overlay" id="overlay">
+    <div class="overlay-banner" id="overlayBanner">
+      <span id="overlayText">点击要关联的图层</span>
+      <span class="overlay-hint">Esc / 右键取消</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
       脚本
       ═══════════════════════════════════════ -->
   <script>
@@ -334,6 +383,11 @@
     const noteList = document.getElementById('noteList');
     const emptyHint = document.getElementById('emptyHint');
     const statusBar = document.getElementById('statusBar');
+    const overlay = document.getElementById('overlay');
+    const overlayText = document.getElementById('overlayText');
+
+    // 覆盖层模式: null | 'linking'
+    let overlayMode = null;
 
     // ── 通信 ──
     function sendToCode(msg) {
@@ -350,10 +404,15 @@
       switch (msg.type) {
         case 'panel-expanded':
           // 沙箱已调整到展开尺寸，切换 UI
+          exitOverlayMode();
           switchToPanel();
           break;
         case 'panel-collapsed':
+          exitOverlayMode();
           switchToBadge();
+          break;
+        case 'overlay-mode':
+          enterOverlayMode();
           break;
         case 'init':
           // 初始化数据
@@ -405,6 +464,43 @@
       badge.style.display = 'none';
       panel.style.display = 'flex';
     }
+
+    // ── 覆盖层模式（关联图层） ──
+    function enterOverlayMode() {
+      overlayMode = 'linking';
+      overlayText.textContent = '点击要关联的图层';
+      overlay.classList.add('active');
+    }
+
+    function exitOverlayMode() {
+      overlayMode = null;
+      overlay.classList.remove('active');
+    }
+
+    // 覆盖层点击 → 发送屏幕坐标
+    overlay.onclick = (e) => {
+      if (!overlayMode) return;
+      sendToCode({
+        type: 'link-to',
+        screenX: e.clientX,
+        screenY: e.clientY,
+      });
+    };
+
+    // 右键取消
+    overlay.oncontextmenu = (e) => {
+      e.preventDefault();
+      if (overlayMode) {
+        sendToCode({ type: 'cancel-overlay' });
+      }
+    };
+
+    // Esc 取消
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && overlayMode) {
+        sendToCode({ type: 'cancel-overlay' });
+      }
+    });
 
     // ── 事件 ──
     badge.onclick = () => {
@@ -465,6 +561,13 @@
           <button class="btn-sm" data-action="lock" data-id="${ann.annotationId}">
             ${ann.isLocked === 'true' ? '🔒 解锁' : '🔓 锁定'}
           </button>
+          <button class="btn-sm" data-action="link" data-id="${ann.annotationId}">
+            🔗 ${ann.targetNodeId ? '改关联' : '关联'}
+          </button>
+          ${ann.targetNodeId ? `
+          <button class="btn-sm" data-action="unlink" data-id="${ann.annotationId}">
+            解除关联
+          </button>` : ''}
           <button class="btn-sm" data-action="delete" data-id="${ann.annotationId}">
             🗑 删除
           </button>
@@ -491,6 +594,18 @@
       card.querySelector('[data-action="locate"]').onclick = () => {
         sendToCode({ type: 'locate-annotation', annotationId: ann.annotationId });
       };
+      const linkBtn = card.querySelector('[data-action="link"]');
+      if (linkBtn) {
+        linkBtn.onclick = () => {
+          sendToCode({ type: 'link-annotation', annotationId: ann.annotationId });
+        };
+      }
+      const unlinkBtn = card.querySelector('[data-action="unlink"]');
+      if (unlinkBtn) {
+        unlinkBtn.onclick = () => {
+          sendToCode({ type: 'unlink-annotation', annotationId: ann.annotationId });
+        };
+      }
 
       // 文本编辑
       const textarea = card.querySelector('.note-textarea');
