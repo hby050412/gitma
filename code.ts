@@ -324,7 +324,49 @@ function handleUpdateNote(annotationId: string, note: string): void {
     annotation: readAnnotationData(marker),
   });
 
+  // 同步刷新画布上对应的备注浮窗内容
+  updatePopupContent(annotationId);
+
   backupAllAnnotations();
+}
+
+/** 刷新浮窗中的备注内容（备注更新后同步显示） */
+function updatePopupContent(annotationId: string): void {
+  const popup = activePopups.get(annotationId);
+  if (!popup || popup.removed) return;
+
+  const marker = findAnnotationById(annotationId);
+  if (!marker) return;
+
+  const note = marker.getPluginData(PD.note) || '(暂无备注)';
+  const text = note.length > 120 ? note.substring(0, 120) + '…' : note;
+
+  const contentText = popup.children.find(
+    (c) => c.type === 'TEXT' && c.name === 'popupContent',
+  ) as TextNode | undefined;
+  if (!contentText) return;
+
+  contentText.characters = text;
+
+  // 重新计算尺寸
+  const closeText = popup.children.find(
+    (c) => c.type === 'TEXT' && c.name === 'popupClose',
+  ) as TextNode | undefined;
+
+  const contentW = Math.min(Math.max(contentText.width, 160), 240);
+  contentText.resize(contentW, contentText.height);
+  const frameW = 44 + contentW + 24;
+  const frameH = Math.max(44, contentText.y + contentText.height + 16);
+  popup.resize(frameW, frameH);
+  if (closeText) {
+    closeText.x = frameW - closeText.width - 10;
+  }
+
+  // 尺寸变化后重排：仅图层右侧布局（auto 模式）的浮窗需要重排，
+  // 临时查看（click 模式）的浮窗保持当前位置
+  if (popup.getPluginData('popupMode') !== 'click') {
+    layoutAllPopups();
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -856,6 +898,13 @@ function handleAnnotationPositionChange(marker: GroupNode): void {
   // 正常拖拽 → 更新偏移量
   updateMarkerOffset(marker);
 
+  // 拖拽编号点时，其临时浮窗恢复到图层右侧布局
+  const popup = activePopups.get(marker.getPluginData(PD.annotationId));
+  if (popup && !popup.removed && popup.getPluginData('popupMode') === 'click') {
+    restorePopupToAuto(popup, marker);
+    layoutAllPopups();
+  }
+
   // 同步 UI
   figma.ui.postMessage({
     type: 'annotation-updated',
@@ -1009,7 +1058,8 @@ figma.on('selectionchange', () => {
     }
   }
 
-  // 选中其他内容 → 通知 UI 取消高亮（不自动关闭浮窗）
+  // 选中其他内容 → 临时查看的浮窗恢复图层右侧布局，通知 UI 取消高亮
+  restoreAllClickPopups();
   figma.ui.postMessage({ type: 'annotation-selected', annotationId: null });
 });
 
@@ -1038,9 +1088,10 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
   const existing = activePopups.get(annotationId);
 
   if (existing && !existing.removed) {
-    // 已存在 → 点击唤出时移动到编号点旁
+    // 已存在 → 点击唤出时移动到编号点旁，并刷新内容保证最新
     if (mode === 'click') {
       positionPopupNearMarker(existing, marker);
+      updatePopupContent(annotationId);
     }
     return;
   }
@@ -1059,10 +1110,33 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
   });
 }
 
-/** 将浮窗移动到编号点右侧 */
+/** 将浮窗移动到编号点右侧（点击模式：临时查看，不参与图层右侧布局） */
 function positionPopupNearMarker(popup: FrameNode, marker: GroupNode): void {
   popup.x = marker.x + MARKER_SIZE + 10;
   popup.y = marker.y;
+  popup.setPluginData('popupMode', 'click');
+}
+
+/** 将浮窗恢复到图层右侧布局模式 */
+function restorePopupToAuto(popup: FrameNode, marker: GroupNode): void {
+  popup.setPluginData('popupMode', 'auto');
+  positionPopupNearTarget(popup, marker);
+}
+
+/** 所有临时查看（click 模式）的浮窗恢复到图层右侧布局 */
+function restoreAllClickPopups(): void {
+  let changed = false;
+  for (const [annotationId, popup] of activePopups) {
+    if (popup.removed) continue;
+    if (popup.getPluginData('popupMode') === 'click') {
+      const marker = findAnnotationById(annotationId);
+      if (marker) {
+        restorePopupToAuto(popup, marker);
+        changed = true;
+      }
+    }
+  }
+  if (changed) layoutAllPopups();
 }
 
 /**
@@ -1115,6 +1189,8 @@ function layoutAllPopups(): void {
 
   for (const [annotationId, popup] of activePopups) {
     if (popup.removed) continue;
+    // 临时查看（click 模式）的浮窗不参与图层右侧布局
+    if (popup.getPluginData('popupMode') === 'click') continue;
     const marker = findAnnotationById(annotationId);
     if (!marker) continue;
 
@@ -1206,6 +1282,7 @@ async function createPopupFrame(
 
   // ── 备注内容文字 ──
   const contentText = figma.createText();
+  contentText.name = 'popupContent';
   contentText.characters = note.length > 120 ? note.substring(0, 120) + '…' : note;
   contentText.fontSize = 12;
   contentText.fontName = { family: 'Inter', style: 'Regular' };

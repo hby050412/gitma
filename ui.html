@@ -213,14 +213,16 @@
     }
     .note-textarea {
       width: 100%;
-      min-height: 36px;
+      min-height: 44px;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 6px 8px;
+      padding: 8px 10px;
       font-size: 12px;
       font-family: var(--font);
       color: var(--text);
-      resize: vertical;
+      line-height: 1.5;
+      resize: none;
+      overflow: hidden;
       outline: none;
       transition: border-color 0.15s;
     }
@@ -373,6 +375,7 @@
     let isExpanded = false;
     let annotations = [];           // 当前标注列表
     let selectedAnnotationId = null; // 当前选中的编号点 ID
+    let editingAnnotationId = null;  // 当前正在编辑输入的卡片 ID
 
     // ── DOM 引用 ──
     const badge = document.getElementById('badge');
@@ -436,7 +439,10 @@
           const idx = annotations.findIndex(a => a.annotationId === msg.annotation.annotationId);
           if (idx >= 0) {
             annotations[idx] = msg.annotation;
-            renderNoteList();
+            // 正在编辑的卡片不重渲染（避免输入框重建导致输入法中断）
+            if (editingAnnotationId !== msg.annotation.annotationId) {
+              renderNoteList();
+            }
           }
           break;
         case 'annotations-renumbered':
@@ -607,18 +613,52 @@
         };
       }
 
-      // 文本编辑
+      // 文本编辑（防抖同步 + 自动增高 + 编辑中不重渲染）
       const textarea = card.querySelector('.note-textarea');
+      const titleEl = card.querySelector('.note-title');
+      const debouncedSave = debounce((value) => {
+        sendToCode({ type: 'update-note', annotationId: ann.annotationId, note: value });
+      }, 300);
+
+      textarea.onfocus = () => {
+        editingAnnotationId = ann.annotationId;
+      };
       textarea.oninput = () => {
-        // 输入时实时同步
-        sendToCode({
-          type: 'update-note',
-          annotationId: ann.annotationId,
-          note: textarea.value,
-        });
+        // 本地更新数据（不触发全量重渲染，保证输入法正常组词）
+        const target = annotations.find(a => a.annotationId === ann.annotationId);
+        if (target) target.note = textarea.value;
+        // 同步标题显示
+        if (titleEl) titleEl.textContent = textarea.value || '(未备注)';
+        // 自动增高
+        autoGrowTextarea(textarea);
+        // 防抖同步到沙箱
+        debouncedSave(textarea.value);
+      };
+      textarea.onblur = () => {
+        editingAnnotationId = null;
+        // 失焦立即保存（防抖兜底）
+        sendToCode({ type: 'update-note', annotationId: ann.annotationId, note: textarea.value });
       };
 
+      // 初始设置一次高度（内容多时直接展开）
+      autoGrowTextarea(textarea);
+
       return card;
+    }
+
+    // 防抖工具
+    function debounce(fn, delay) {
+      let timer = null;
+      return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    // textarea 自动增高
+    function autoGrowTextarea(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
     }
 
     function highlightSelectedCard() {
