@@ -1,0 +1,13 @@
+{
+  "name": "figma-annotation-marker",
+  "version": "1.0.0",
+  "description": "Figma 编号标注插件 — 添加可拖拽的圆形编号点，支持自动重编号与备注管理",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "typescript": "^5.7.0"
+  }
+}
