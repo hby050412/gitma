@@ -207,11 +207,58 @@
       color: var(--white);
     }
 
+    /* ── 搜索栏 ── */
+    .search-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 14px;
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .search-icon {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .search-bar input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 12px;
+      font-family: var(--font);
+      color: var(--text);
+      outline: none;
+    }
+    .search-bar input::placeholder {
+      color: var(--text-secondary);
+    }
+    .search-clear {
+      width: 18px;
+      height: 18px;
+      border: none;
+      background: var(--bg);
+      border-radius: 50%;
+      font-size: 10px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: all var(--t-fast);
+    }
+    .search-clear:hover {
+      background: var(--danger-bg);
+      color: var(--danger);
+    }
+
     /* ── 设置面板（弹出） ── */
     .settings-panel {
       display: none;
       position: absolute;
-      top: 92px;
+      top: 126px;
       left: 12px;
       right: 12px;
       z-index: 150;
@@ -616,6 +663,13 @@
       </button>
     </div>
 
+    <!-- 搜索栏 -->
+    <div class="search-bar">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInput" placeholder="搜索编号，如 3" />
+      <button class="search-clear" id="searchClear" title="清除搜索" style="display:none">✕</button>
+    </div>
+
     <!-- 设置面板（弹出） -->
     <div class="settings-panel" id="settingsPanel">
       <div class="settings-section">
@@ -714,6 +768,8 @@
     const btnLockToggle = document.getElementById('btnLockToggle');
     const btnSettings = document.getElementById('btnSettings');
     const settingsPanel = document.getElementById('settingsPanel');
+    const searchInput = document.getElementById('searchInput');
+    const searchClear = document.getElementById('searchClear');
     const noteList = document.getElementById('noteList');
     const emptyHint = document.getElementById('emptyHint');
     const statusBar = document.getElementById('statusBar');
@@ -932,6 +988,21 @@
       }
     });
 
+    // ── 搜索 ──
+    let searchQuery = '';
+    searchInput.oninput = () => {
+      searchQuery = searchInput.value.trim();
+      searchClear.style.display = searchQuery ? 'block' : 'none';
+      renderNoteList();
+    };
+    searchClear.onclick = () => {
+      searchInput.value = '';
+      searchQuery = '';
+      searchClear.style.display = 'none';
+      renderNoteList();
+      searchInput.focus();
+    };
+
     // 尺寸输入（±按钮 + 数字输入）
     function adjustSize(delta) {
       config.size = Math.min(60, Math.max(12, config.size + delta));
@@ -975,6 +1046,11 @@
     function renderNoteList() {
       noteList.innerHTML = '';
 
+      // 搜索过滤（精确匹配编号）
+      const visible = searchQuery
+        ? annotations.filter(a => String(a.order) === searchQuery)
+        : annotations;
+
       if (annotations.length === 0) {
         noteList.innerHTML = `
           <div class="note-list-empty">
@@ -982,8 +1058,15 @@
             <div class="empty-title">暂无标注</div>
             <div class="empty-hint">选中图层后点击「＋ 添加」开始</div>
           </div>`;
+      } else if (searchQuery && visible.length === 0) {
+        noteList.innerHTML = `
+          <div class="note-list-empty">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">未找到编号 ${escapeHtml(searchQuery)}</div>
+            <div class="empty-hint">输入正确的编号数字试试</div>
+          </div>`;
       } else {
-        annotations
+        visible
           .sort((a, b) => a.order - b.order)
           .forEach(ann => {
             const card = createNoteCard(ann);
@@ -991,7 +1074,12 @@
           });
       }
 
-      statusBar.querySelector('.status-count').textContent = annotations.length;
+      // 状态栏计数：搜索时显示匹配数
+      if (searchQuery) {
+        statusBar.querySelector('.status-count').textContent = `${visible.length}/${annotations.length}`;
+      } else {
+        statusBar.querySelector('.status-count').textContent = annotations.length;
+      }
     }
 
     function createNoteCard(ann) {

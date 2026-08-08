@@ -1376,6 +1376,8 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
       return;
     }
     activePopups.set(annotationId, popup);
+    // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
+    figma.currentPage.appendChild(popup);
     // 创建完成后统一重排（考虑同容器多个浮窗）
     layoutAllPopups();
   });
