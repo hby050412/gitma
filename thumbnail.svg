@@ -1,0 +1,77 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景：浅色画布渐变 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F5F6F8"/>
+      <stop offset="1" stop-color="#E8EFF8"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FAFBFC"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <!-- 标题 -->
+  <text x="960" y="150" font-size="64" font-weight="700" fill="#1A1A1A"
+        text-anchor="middle" font-family="Inter, Microsoft YaHei, Arial, sans-serif">编号标注</text>
+  <text x="960" y="215" font-size="30" fill="#888888"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">Numbered Annotation for Figma</text>
+
+  <!-- 模拟设计界面 Frame（移动端） -->
+  <g transform="translate(330, 260)">
+    <rect width="520" height="700" rx="24" fill="url(#card)" stroke="#E8ECF0" stroke-width="2"/>
+    <!-- 顶部导航 -->
+    <rect x="40" y="40" width="440" height="48" rx="12" fill="#EBF2FB"/>
+    <rect x="40" y="110" width="160" height="20" rx="10" fill="#D8E4F5"/>
+    <!-- 内容区 -->
+    <rect x="40" y="160" width="440" height="220" rx="16" fill="#F5F6F8"/>
+    <rect x="40" y="400" width="300" height="16" rx="8" fill="#D8E4F5"/>
+    <rect x="40" y="430" width="380" height="16" rx="8" fill="#E8ECF0"/>
+    <rect x="40" y="460" width="340" height="16" rx="8" fill="#E8ECF0"/>
+    <rect x="40" y="520" width="200" height="16" rx="8" fill="#D8E4F5"/>
+    <!-- 底部按钮 -->
+    <rect x="40" y="600" width="440" height="56" rx="16" fill="#4A90D9"/>
+  </g>
+
+  <!-- 编号点 ① -->
+  <circle cx="330" cy="380" r="34" fill="#4A90D9" stroke="#FFFFFF" stroke-width="6"/>
+  <text x="330" y="398" font-size="40" font-weight="700" fill="#FFFFFF"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">1</text>
+
+  <!-- 编号点 ② -->
+  <circle cx="580" cy="500" r="34" fill="#3CB371" stroke="#FFFFFF" stroke-width="6"/>
+  <text x="580" y="518" font-size="40" font-weight="700" fill="#FFFFFF"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">2</text>
+
+  <!-- 编号点 ③ -->
+  <circle cx="700" cy="660" r="34" fill="#F5A623" stroke="#FFFFFF" stroke-width="6"/>
+  <text x="700" y="678" font-size="40" font-weight="700" fill="#FFFFFF"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">3</text>
+
+  <!-- 备注浮窗 1 -->
+  <g transform="translate(905, 300)">
+    <rect width="620" height="150" rx="18" fill="#FFFFFF" stroke="#E8ECF0" stroke-width="2"/>
+    <circle cx="60" cy="75" r="28" fill="#4A90D9"/>
+    <text x="60" y="88" font-size="32" font-weight="700" fill="#FFFFFF"
+          text-anchor="middle" font-family="Inter, Arial, sans-serif">1</text>
+    <rect x="108" y="55" width="440" height="16" rx="8" fill="#1A1A1A" opacity="0.85"/>
+    <rect x="108" y="85" width="380" height="14" rx="7" fill="#D8DDE4"/>
+    <rect x="108" y="110" width="300" height="14" rx="7" fill="#E8ECF0"/>
+  </g>
+
+  <!-- 备注浮窗 2 -->
+  <g transform="translate(1080, 490)">
+    <rect width="620" height="130" rx="18" fill="#FFFFFF" stroke="#E8ECF0" stroke-width="2"/>
+    <circle cx="60" cy="65" r="28" fill="#3CB371"/>
+    <text x="60" y="78" font-size="32" font-weight="700" fill="#FFFFFF"
+          text-anchor="middle" font-family="Inter, Arial, sans-serif">2</text>
+    <rect x="108" y="45" width="400" height="16" rx="8" fill="#1A1A1A" opacity="0.85"/>
+    <rect x="108" y="75" width="340" height="14" rx="7" fill="#D8DDE4"/>
+  </g>
+
+  <!-- 底部品牌条 -->
+  <rect x="960" y="990" width="620" height="6" rx="3" fill="#4A90D9" opacity="0.25"/>
+  <text x="960" y="1040" font-size="26" fill="#888888"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">Auto-numbering · Layer binding · Note popups · Search</text>
+</svg>

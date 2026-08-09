@@ -1,9 +1,14 @@
 {
   "name": "编号标注",
-  "id": "annotation-marker-dev",
+  "id": "1668170358329680006",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "插件所有功能均在 Figma 沙箱和插件 UI 内本地运行，无需访问任何外部网络服务"
+  },
+  "documentAccess": "dynamic-page",
   "capabilities": [],
   "enableProposedApi": false,
   "editorType": ["figma"]

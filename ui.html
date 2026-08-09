@@ -833,16 +833,12 @@
           const idx = annotations.findIndex(a => a.annotationId === msg.annotation.annotationId);
           if (idx >= 0) {
             annotations[idx] = msg.annotation;
-            // 正在编辑的卡片不重渲染（避免输入框重建导致输入法中断）
-            if (editingAnnotationId !== msg.annotation.annotationId) {
+            // 编辑中一律不重渲染（避免输入框重建导致输入法中断；数据已更新，下次渲染时显示）
+            if (editingAnnotationId === null) {
               renderNoteList();
             }
           }
           updateLockButton();
-          break;
-        case 'annotations-renumbered':
-          annotations = msg.annotations;
-          renderNoteList();
           break;
         case 'annotation-selected':
           selectedAnnotationId = msg.annotationId;
@@ -1074,8 +1070,8 @@
           });
       }
 
-      // 状态栏计数：搜索时显示匹配数
-      if (searchQuery) {
+      // 状态栏计数：搜索时显示匹配数（无标注时不显示 0/0）
+      if (searchQuery && annotations.length > 0) {
         statusBar.querySelector('.status-count').textContent = `${visible.length}/${annotations.length}`;
       } else {
         statusBar.querySelector('.status-count').textContent = annotations.length;
@@ -1206,9 +1202,18 @@
     }
 
     // ── 键盘快捷键 ──
+    // 焦点是否在表单控件中（输入框/按钮/下拉），快捷键不应拦截用户在这些控件上的操作
+    function isInFormControl() {
+      const el = document.activeElement;
+      return el && ['TEXTAREA', 'INPUT', 'SELECT', 'BUTTON'].includes(el.tagName);
+    }
+
     document.addEventListener('keydown', (e) => {
-      // 仅在面板展开时生效
-      if (!isExpanded) return;
+      // 仅在面板展开时生效；输入法组词期间不拦截
+      if (!isExpanded || e.isComposing) return;
+
+      // 表单控件中获得焦点时不触发插件快捷键
+      if (isInFormControl()) return;
 
       const mod = e.ctrlKey || e.metaKey;
 
@@ -1228,12 +1233,10 @@
         return;
       }
 
-      // Delete / Backspace: 删除选中的编号点（仅在非输入框中）
+      // Delete / Backspace: 删除选中的编号点
       if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
-        selectedAnnotationId &&
-        document.activeElement?.tagName !== 'TEXTAREA' &&
-        document.activeElement?.tagName !== 'INPUT'
+        selectedAnnotationId
       ) {
         e.preventDefault();
         sendToCode({ type: 'delete-annotation', annotationId: selectedAnnotationId });

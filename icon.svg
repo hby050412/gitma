@@ -1,0 +1,19 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景：白底圆角（与插件 UI 白蓝风格一致） -->
+  <rect width="128" height="128" rx="28" fill="#FFFFFF"/>
+  <rect width="128" height="128" rx="28" fill="none" stroke="#E8ECF0" stroke-width="2"/>
+
+  <!-- 编号点：蓝色圆形 + 白色数字（与画布编号点同款） -->
+  <circle cx="52" cy="52" r="26" fill="#4A90D9"/>
+  <circle cx="52" cy="52" r="26" fill="none" stroke="#FFFFFF" stroke-width="3"/>
+  <text x="52" y="62" font-size="28" font-weight="700" fill="#FFFFFF"
+        text-anchor="middle" font-family="Inter, Arial, sans-serif">1</text>
+
+  <!-- 备注浮窗：浅蓝气泡 -->
+  <rect x="74" y="64" width="42" height="38" rx="10" fill="#EBF2FB"/>
+  <rect x="66" y="92" width="12" height="12" rx="4" fill="#EBF2FB"/>
+
+  <!-- 备注内容行 -->
+  <rect x="84" y="74" width="24" height="5" rx="2.5" fill="#4A90D9" opacity="0.55"/>
+  <rect x="84" y="84" width="18" height="5" rx="2.5" fill="#4A90D9" opacity="0.3"/>
+</svg>

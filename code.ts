@@ -113,6 +113,21 @@ let uiIsExpanded = false;
 /** 程序化删除的节点 ID 集合（区分插件删除与用户画布删除，避免恢复被插删的编号点） */
 const programmaticDeleteIds = new Set<string>();
 
+/**
+ * 程序化修改的编号点 ID 集合（延迟清理）。
+ * documentchange 是异步触发的，同步标记（isProgrammaticMove）在回调时已复位，
+ * 因此程序化修改必须登记节点 ID，回调时按 ID 跳过处理。
+ */
+const programmaticChangeIds = new Set<string>();
+
+/** 登记程序化修改并自动延迟清理（documentchange 异步回调时仍有效） */
+function markProgrammatic(nodeId: string): void {
+  programmaticChangeIds.add(nodeId);
+  setTimeout(() => {
+    programmaticChangeIds.delete(nodeId);
+  }, 500);
+}
+
 // ══════════════════════════════════════════════
 // 初始化
 // ══════════════════════════════════════════════
@@ -313,8 +328,15 @@ async function createMarkerNode(
   // 先将 ellipse 和 text 创建在 (0,0)，组合后再移动到目标位置
   const group = figma.group([ellipse, text], figma.currentPage);
   group.name = `${ANNOTATION_PREFIX} #${order}`;
-  group.x = x;
-  group.y = y;
+  // 程序化定位：登记节点 ID，防护 documentchange 重入（避免新建时立即触发自动重关联）
+  markProgrammatic(group.id);
+  isProgrammaticMove = true;
+  try {
+    group.x = x;
+    group.y = y;
+  } finally {
+    isProgrammaticMove = false;
+  }
   group.expanded = false;
 
   return group;
@@ -449,10 +471,17 @@ function updateMarkerAppearance(marker: GroupNode): void {
   const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
   if (!ellipse) return;
 
-  if (isLocked) {
-    ellipse.fills = [{ type: 'SOLID', color: { r: 0.753, g: 0.769, b: 0.8 } }]; // #C0C4CC
-  } else {
-    ellipse.fills = [{ type: 'SOLID', color: getConfig().color }];
+  // 程序化修改：登记节点 ID，防护 documentchange 重入
+  markProgrammatic(marker.id);
+  isProgrammaticMove = true;
+  try {
+    if (isLocked) {
+      ellipse.fills = [{ type: 'SOLID', color: { r: 0.753, g: 0.769, b: 0.8 } }]; // #C0C4CC
+    } else {
+      ellipse.fills = [{ type: 'SOLID', color: getConfig().color }];
+    }
+  } finally {
+    isProgrammaticMove = false;
   }
 }
 
@@ -486,11 +515,12 @@ function applyConfig(config: PluginConfig): void {
     applySizeToMarker(marker, config.size);
   }
 
-  // 2. 备注区域宽度 + 字号应用到所有浮窗
-  for (const popup of activePopups.values()) {
-    if (!popup.removed) {
-      applyPopupStyle(popup, config);
-    }
+  // 2. 备注区域宽度 + 字号应用到所有浮窗（锁定的编号点浮窗跳过，保持一致性）
+  for (const [annotationId, popup] of activePopups) {
+    if (popup.removed) continue;
+    const marker = findAnnotationById(annotationId);
+    if (marker && marker.getPluginData(PD.isLocked) === 'true') continue;
+    applyPopupStyle(popup, config);
   }
   layoutAllPopups();
 }
@@ -500,6 +530,7 @@ function applySizeToMarker(marker: GroupNode, size: number): void {
   const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
   const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
 
+  markProgrammatic(marker.id);
   isProgrammaticMove = true;
   try {
     if (ellipse) ellipse.resize(size, size);
@@ -561,6 +592,26 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 const RELINK_THROTTLE = 200;
 let lastRelinkTime = 0;
 
+/** trailing 补测：节流期间跳过的编号点，拖拽静止后补测最终位置 */
+const pendingRelinkMarkers = new Set<GroupNode>();
+let relinkFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 调度一次拖尾补测（250ms 后若位置未再变化则补测） */
+function scheduleRelinkFlush(): void {
+  if (relinkFlushTimer) return;
+  relinkFlushTimer = setTimeout(() => {
+    relinkFlushTimer = null;
+    if (pendingRelinkMarkers.size === 0) return;
+    const batch = Array.from(pendingRelinkMarkers);
+    pendingRelinkMarkers.clear();
+    for (const marker of batch) {
+      if (!marker.removed) {
+        detectAndUpdateBinding(marker, true);
+      }
+    }
+  }, 250);
+}
+
 /** 命中检测：找到画布上位于指定点的最顶层图层 */
 function hitTest(world: { x: number; y: number }): SceneNode | null {
   const topLevel = figma.currentPage.children;
@@ -605,11 +656,19 @@ function hitTestNode(
  * 检测编号点当前位置所在图层，自动更新关联：
  * - 命中图层且与当前绑定不同 → 切换到新图层
  * - 未命中任何图层 → 解除绑定（独立编号点）
+ * @param force 是否跳过节流（trailing 补测时传 true）
  */
-function detectAndUpdateBinding(marker: GroupNode): void {
-  const now = Date.now();
-  if (now - lastRelinkTime < RELINK_THROTTLE) return;
-  lastRelinkTime = now;
+function detectAndUpdateBinding(marker: GroupNode, force = false): void {
+  if (!force) {
+    const now = Date.now();
+    if (now - lastRelinkTime < RELINK_THROTTLE) {
+      // 节流内：登记待补测，拖拽静止后补测最终位置
+      pendingRelinkMarkers.add(marker);
+      scheduleRelinkFlush();
+      return;
+    }
+    lastRelinkTime = now;
+  }
 
   const center = {
     x: marker.x + marker.width / 2,
@@ -669,6 +728,9 @@ function bindAnnotation(annotationId: string, target: SceneNode): void {
     annotation: readAnnotationData(marker),
   });
 
+  // 绑定变化后重排浮窗（auto 模式浮窗跟随新图层位置）
+  layoutAllPopups();
+
   backupAllAnnotations();
 }
 
@@ -703,14 +765,21 @@ function renumberAll(): void {
     const newOrder = index + 1;
     const oldOrder = marker.getPluginData(PD.order);
     if (String(newOrder) !== oldOrder) {
-      marker.setPluginData(PD.order, String(newOrder));
-      // 更新文字（按类型查找，避免下标失效）
-      const textNode = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
-      if (textNode) {
-        textNode.characters = String(newOrder);
+      // 程序化修改：登记节点 ID，防护 documentchange 重入（避免触发自动重关联/假锁提示）
+      markProgrammatic(marker.id);
+      isProgrammaticMove = true;
+      try {
+        marker.setPluginData(PD.order, String(newOrder));
+        // 更新文字（按类型查找，避免下标失效）
+        const textNode = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
+        if (textNode) {
+          textNode.characters = String(newOrder);
+        }
+        // 更新名称
+        marker.name = `${ANNOTATION_PREFIX} #${newOrder}`;
+      } finally {
+        isProgrammaticMove = false;
       }
-      // 更新名称
-      marker.name = `${ANNOTATION_PREFIX} #${newOrder}`;
       // 同步浮窗序号
       updatePopupNumber(marker.getPluginData(PD.annotationId), newOrder);
     }
@@ -869,9 +938,12 @@ figma.on('documentchange', (event) => {
 
     // 1. 编号点本身或其子节点发生变化（拖拽/缩放/改形状/改外观）
     //    → 更新偏移 或 锁定复位（锁定状态下任何修改都禁止）
+    //    程序化修改（插件自身操作）按节点 ID 跳过，避免重入引发误解绑/假提示
     const marker = findMarkerOfNode(node);
     if (marker) {
-      handleAnnotationChange(marker);
+      if (!programmaticChangeIds.has(marker.id)) {
+        handleAnnotationChange(marker);
+      }
       continue;
     }
 
@@ -953,10 +1025,17 @@ async function restoreMarker(data: AnnotationData): Promise<void> {
     if (target) {
       addAnnotationRef(data.targetNodeId, data.annotationId);
       // 立即把编号点放到绑定目标当前位置（备份可能过期）
+      // 程序化定位：登记节点 ID，防护 documentchange 重入（避免恢复时立即触发自动重关联）
       const box = target.absoluteBoundingBox;
       if (box) {
-        marker.x = box.x + data.offsetX;
-        marker.y = box.y + data.offsetY;
+        markProgrammatic(marker.id);
+        isProgrammaticMove = true;
+        try {
+          marker.x = box.x + data.offsetX;
+          marker.y = box.y + data.offsetY;
+        } finally {
+          isProgrammaticMove = false;
+        }
       }
       // 恢复浮窗（有绑定目标时，浮窗一起回来）
       if (!activePopups.has(data.annotationId)) {
@@ -1046,6 +1125,7 @@ function resetMarkerState(marker: GroupNode): void {
   const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
   const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
 
+  markProgrammatic(marker.id);
   isProgrammaticMove = true;
   try {
     // 1. 复位子节点局部位置与变换（解除翻转/镜像）
@@ -1213,6 +1293,7 @@ function resetMarkerPosition(marker: GroupNode): void {
 
 /** 程序化移动编号点（由插件逻辑触发，不会被当作用户拖拽） */
 function moveMarkerProgrammatically(marker: GroupNode, x: number, y: number): void {
+  markProgrammatic(marker.id);
   isProgrammaticMove = true;
   try {
     marker.x = x;
@@ -1366,21 +1447,27 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
   }
 
   // 创建新浮窗（异步加载字体）
-  createPopupFrame(marker, mode).then((popup) => {
-    popupCreating.delete(annotationId);
-    autoCreatedIds.delete(annotationId);
-    if (!popup) return;
-    // 竞态保护：创建期间编号点可能已被删除，此时丢弃刚创建的浮窗
-    if (!findAnnotationById(annotationId)) {
-      popup.remove();
-      return;
-    }
-    activePopups.set(annotationId, popup);
-    // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
-    figma.currentPage.appendChild(popup);
-    // 创建完成后统一重排（考虑同容器多个浮窗）
-    layoutAllPopups();
-  });
+  createPopupFrame(marker, mode)
+    .then((popup) => {
+      popupCreating.delete(annotationId);
+      autoCreatedIds.delete(annotationId);
+      if (!popup) return;
+      // 竞态保护：创建期间编号点可能已被删除，此时丢弃刚创建的浮窗
+      if (!findAnnotationById(annotationId)) {
+        popup.remove();
+        return;
+      }
+      activePopups.set(annotationId, popup);
+      // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
+      figma.currentPage.appendChild(popup);
+      // 创建完成后统一重排（考虑同容器多个浮窗）
+      layoutAllPopups();
+    })
+    .catch(() => {
+      // 创建失败（如字体加载失败）：清理标记，允许后续重试
+      popupCreating.delete(annotationId);
+      autoCreatedIds.delete(annotationId);
+    });
 }
 
 /** 将浮窗移动到编号点右侧（点击模式：临时查看，不参与图层右侧布局） */
