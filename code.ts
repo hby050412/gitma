@@ -268,12 +268,13 @@ async function createAnnotationAt(
   figma.currentPage.selection = [marker];
 
   // 自动显示备注浮窗：仅有关联图层时显示在图层右侧；无关联不显示
+  console.log('[编号标注] 创建完成，绑定目标:', marker.getPluginData(PD.targetNodeId) || '无');
   if (marker.getPluginData(PD.targetNodeId)) {
     showOrCreatePopup(marker, 'auto');
   }
 
   // 统一重编号（修复快速连续添加可能产生的同号问题）
-  renumberAll();
+  void renumberAll().catch((err) => { console.error("[编号标注] 重编号失败:", err); });
 
   // 更新备份
   backupAllAnnotations();
@@ -381,7 +382,7 @@ function handleDeleteAnnotation(annotationId: string): void {
   figma.ui.postMessage({ type: 'annotation-removed', annotationId });
 
   // 触发重编号
-  renumberAll();
+  void renumberAll().catch((err) => { console.error("[编号标注] 重编号失败:", err); });
 }
 
 // ══════════════════════════════════════════════
@@ -777,7 +778,15 @@ function handleLocateAnnotation(annotationId: string): void {
 // 自动重编号
 // ══════════════════════════════════════════════
 
-function renumberAll(): void {
+async function renumberAll(): Promise<void> {
+  // 修改编号文字前必须先加载字体（Figma 沙箱中字体加载状态不持久）
+  try {
+    await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
+  } catch (err) {
+    console.error('[编号标注] 加载字体失败:', err);
+    return;
+  }
+
   const allMarkers = findAllAnnotationGroups();
   allMarkers.sort(
     (a, b) =>
@@ -803,15 +812,14 @@ function renumberAll(): void {
       } finally {
         isProgrammaticMove = false;
       }
-      // 同步浮窗序号
+      // 同步浮窗序号（字体已加载）
       updatePopupNumber(marker.getPluginData(PD.annotationId), newOrder);
     }
   });
 
-  // 兜底清理孤儿浮窗（编号点已删除但浮窗残留的情况）
-  cleanupOrphanPopups();
-
   // 重排浮窗（编号变化后排列顺序可能改变）
+  // 注意：不再调用 cleanupOrphanPopups——findAll 在 dynamic-page 模式下查不到刚创建的
+  // 编号点，会误删正常浮窗。孤儿浮窗由删除路径（removePopupForcefully）和页面切换兜底
   void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 
   // 同步到 UI
@@ -873,18 +881,42 @@ function syncAllAnnotations(): void {
 
 /** 扫描当前页面所有编号点 Group（递归，以 PluginData 为准） */
 function findAllAnnotationGroups(): GroupNode[] {
-  return figma.currentPage.findAll(
+  // 先用 findAll 递归扫描；若为空（dynamic-page 模式下对刚创建节点的查询可能不可靠），
+  // 兜底扫描页面顶层 children
+  const found = figma.currentPage.findAll(
     (n) => n.type === 'GROUP' && n.getPluginData(PD.annotationId) !== '',
   ) as GroupNode[];
+  if (found.length > 0) return found;
+
+  const topLevel: GroupNode[] = [];
+  for (const child of figma.currentPage.children) {
+    if (
+      child.type === 'GROUP' &&
+      child.getPluginData(PD.annotationId) !== ''
+    ) {
+      topLevel.push(child as GroupNode);
+    }
+  }
+  return topLevel;
 }
 
-/** 按 annotationId 查找编号点 */
+/** 按 annotationId 查找编号点（findAll 失败时兜底扫描顶层 children） */
 function findAnnotationById(annotationId: string): GroupNode | null {
   if (!annotationId) return null;
   const found = figma.currentPage.findAll(
     (n) => n.type === 'GROUP' && n.getPluginData(PD.annotationId) === annotationId,
   );
-  return (found[0] as GroupNode) || null;
+  if (found.length > 0) return found[0] as GroupNode;
+
+  for (const child of figma.currentPage.children) {
+    if (
+      child.type === 'GROUP' &&
+      child.getPluginData(PD.annotationId) === annotationId
+    ) {
+      return child as GroupNode;
+    }
+  }
+  return null;
 }
 
 /** 获取下一个可用序号 */
@@ -1005,7 +1037,7 @@ async function initPlugin(): Promise<void> {
           const newId = generateId();
           markProgrammatic(created.id);
           created.setPluginData(PD.annotationId, newId);
-          renumberAll();
+          void renumberAll().catch((err) => { console.error("[编号标注] 重编号失败:", err); });
         }
         continue;
       }
@@ -1172,15 +1204,35 @@ async function restoreMarker(data: AnnotationData): Promise<void> {
 }
 
 /** 清理孤儿浮窗：编号点已不存在但仍残留的浮窗 */
+/**
+ * 清理孤儿浮窗：编号点已删除但浮窗残留。
+ * 注意：findAll 在 dynamic-page 模式下对刚创建的节点可能查不到，
+ * 因此采用「连续两次确认」机制，避免误删正常浮窗。
+ */
+const orphanMissCounts = new Map<string, number>();
 function cleanupOrphanPopups(): void {
   for (const [annotationId, popup] of activePopups) {
     if (popup.removed) {
       activePopups.delete(annotationId);
+      orphanMissCounts.delete(annotationId);
       continue;
     }
     if (!findAnnotationById(annotationId)) {
-      popup.remove();
-      activePopups.delete(annotationId);
+      const miss = (orphanMissCounts.get(annotationId) || 0) + 1;
+      orphanMissCounts.set(annotationId, miss);
+      // 诊断：列出页面顶层节点，确认编号点是否真的不在
+      const topInfo = figma.currentPage.children
+        .map((c) => `${c.type}:${c.name}:${c.getPluginData(PD.annotationId)}`)
+        .join(' | ');
+      console.warn('[编号标注] 孤儿检查 miss', miss, '次:', annotationId, '| 页面节点:', topInfo);
+      if (miss >= 2) {
+        console.warn('[编号标注] 孤儿浮窗清理（连续两次确认编号点不存在）:', annotationId);
+        popup.remove();
+        activePopups.delete(annotationId);
+        orphanMissCounts.delete(annotationId);
+      }
+    } else {
+      orphanMissCounts.delete(annotationId);
     }
   }
   void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
@@ -1537,21 +1589,6 @@ function isNodeOrDescendant(node: BaseNode, targetId: string): boolean {
   return false;
 }
 
-/** 查找绑定到指定目标图层的所有编号点 */
-function findAnnotationsByTargetId(targetNodeId: string): GroupNode[] {
-  const results: GroupNode[] = [];
-  for (const node of figma.currentPage.children) {
-    if (
-      node.type === 'GROUP' &&
-      node.name.startsWith(ANNOTATION_PREFIX) &&
-      node.getPluginData(PD.targetNodeId) === targetNodeId
-    ) {
-      results.push(node);
-    }
-  }
-  return results;
-}
-
 // ══════════════════════════════════════════════
 // 临时浮窗管理
 // ══════════════════════════════════════════════
@@ -1625,6 +1662,7 @@ const autoCreatedIds = new Set<string>();
 function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
   const annotationId = marker.getPluginData(PD.annotationId);
   const existing = activePopups.get(annotationId);
+  console.log('[编号标注] showOrCreatePopup:', mode, '| id:', annotationId, '| existing:', !!existing, '| creating:', popupCreating.has(annotationId));
 
   if (existing && !existing.removed) {
     // 已存在 → 点击唤出时移动到编号点旁，并刷新内容保证最新
@@ -1646,22 +1684,34 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
 
   // 创建新浮窗（异步加载字体）
   createPopupFrame(marker, mode)
-    .then((popup) => {
+    .then(async (popup) => {
       popupCreating.delete(annotationId);
-      autoCreatedIds.delete(annotationId);
+      // autoCreatedIds 延迟清除：覆盖添加后 selectionchange 的派发窗口，
+      // 防止刚创建的浮窗被自动选中拉到编号点旁（应保持在图层右侧）
+      setTimeout(() => {
+        autoCreatedIds.delete(annotationId);
+      }, 300);
       if (!popup) return;
-      // 竞态保护：创建期间编号点可能已被删除，此时丢弃刚创建的浮窗
-      if (!findAnnotationById(annotationId)) {
+      // 竞态保护：创建期间编号点可能已被删除，此时丢弃刚创建的浮窗。
+      // 用 marker 直接引用检查（findAll 在 dynamic-page 模式下对刚创建的节点可能查不到）
+      if (marker.removed) {
+        console.warn('[编号标注] 浮窗竞态丢弃（编号点已删除）:', annotationId);
         popup.remove();
         return;
       }
       activePopups.set(annotationId, popup);
       // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
       figma.currentPage.appendChild(popup);
+      // 防御：auto 模式创建完成后显式定位到图层右侧（覆盖创建期间的异步时序问题）
+      if (mode === 'auto') {
+        await positionPopupNearTarget(popup, marker);
+      }
+      console.log('[编号标注] 浮窗创建完成:', annotationId, 'mode:', mode, '位置:', Math.round(popup.x), Math.round(popup.y), '绑定:', marker.getPluginData(PD.targetNodeId) || '无');
       // 创建完成后统一重排（考虑同容器多个浮窗）
       void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
     })
-    .catch(() => {
+    .catch((err) => {
+      console.error('[编号标注] 浮窗创建失败:', annotationId, err);
       // 创建失败（如字体加载失败）：清理标记，允许后续重试
       popupCreating.delete(annotationId);
       autoCreatedIds.delete(annotationId);
@@ -1882,15 +1932,15 @@ async function createPopupFrame(
   closeText.x = frameW - closeText.width - 10;
   closeText.y = 8;
 
-  // ── 位置 ──
+  // 插入当前页面（修复：此前未插入页面导致浮窗不可见）
+  figma.currentPage.appendChild(frame);
+
+  // ── 位置（须在插入页面之后设置，未插入节点的坐标不保留） ──
   if (mode === 'auto') {
     await positionPopupNearTarget(frame, marker);
   } else {
     positionPopupNearMarker(frame, marker);
   }
-
-  // 插入当前页面（修复：此前未插入页面导致浮窗不可见）
-  figma.currentPage.appendChild(frame);
 
   return frame;
 }
@@ -1898,6 +1948,7 @@ async function createPopupFrame(
 /** 关闭并删除浮窗 Frame */
 function closePopupByFrame(popupFrame: FrameNode): void {
   const annotationId = popupFrame.getPluginData('popupFor');
+  console.warn('[编号标注] 浮窗被关闭(closePopupByFrame):', annotationId);
   if (annotationId) {
     activePopups.delete(annotationId);
   }
