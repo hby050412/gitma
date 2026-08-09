@@ -602,6 +602,15 @@
       background: var(--danger-bg);
       color: var(--danger);
     }
+    .btn-sm.confirming {
+      background: var(--danger);
+      color: var(--white);
+    }
+    .btn-sm.confirming:hover {
+      background: var(--danger);
+      color: var(--white);
+      opacity: 0.9;
+    }
     .actions-spacer {
       flex: 1;
     }
@@ -826,6 +835,9 @@
           if (selectedAnnotationId === msg.annotationId) {
             selectedAnnotationId = null;
           }
+          if (editingAnnotationId === msg.annotationId) {
+            editingAnnotationId = null;
+          }
           renderNoteList();
           updateLockButton();
           break;
@@ -861,6 +873,8 @@
       isExpanded = true;
       badge.style.display = 'none';
       panel.style.display = 'flex';
+      // 收起期间设置面板可能开着，展开时重置
+      settingsPanel.classList.remove('open');
     }
 
     // ── 事件 ──
@@ -935,7 +949,9 @@
       const toHex = (v) =>
         Math.round(v * 255).toString(16).padStart(2, '0');
       config = {
-        color: cfg.color ? `#${toHex(cfg.color.r)}${toHex(cfg.color.g)}${toHex(cfg.color.b)}` : config.color,
+        color: cfg.color
+          ? `#${toHex(cfg.color.r)}${toHex(cfg.color.g)}${toHex(cfg.color.b)}`.toUpperCase()
+          : config.color,
         size: cfg.size ?? config.size,
         charsPerLine: cfg.charsPerLine ?? config.charsPerLine,
         fontSize: cfg.fontSize ?? config.fontSize,
@@ -1126,7 +1142,33 @@
       card.querySelector('[data-action="lock"]').onclick = () => {
         sendToCode({ type: 'toggle-lock', annotationId: ann.annotationId });
       };
-      card.querySelector('[data-action="delete"]').onclick = () => {
+      // 删除两段确认：第一次点击进入「确认」状态，3 秒内再点才真正删除
+      // 确认状态存到内存数据（ann._deleteArmed），重渲染后不丢失
+      const deleteBtn = card.querySelector('[data-action="delete"]');
+      let deleteArmed = !!ann._deleteArmed;
+      let deleteTimer = null;
+      if (deleteArmed) {
+        deleteBtn.textContent = '确认删除？';
+        deleteBtn.classList.add('confirming');
+      }
+      deleteBtn.onclick = () => {
+        if (!deleteArmed) {
+          deleteArmed = true;
+          ann._deleteArmed = true;
+          deleteBtn.textContent = '确认删除？';
+          deleteBtn.classList.add('confirming');
+          clearTimeout(deleteTimer);
+          deleteTimer = setTimeout(() => {
+            deleteArmed = false;
+            ann._deleteArmed = false;
+            deleteBtn.textContent = '🗑 删除';
+            deleteBtn.classList.remove('confirming');
+          }, 3000);
+          return;
+        }
+        deleteArmed = false;
+        ann._deleteArmed = false;
+        clearTimeout(deleteTimer);
         sendToCode({ type: 'delete-annotation', annotationId: ann.annotationId });
       };
       card.querySelector('[data-action="locate"]').onclick = () => {
@@ -1159,8 +1201,11 @@
       };
       textarea.onblur = () => {
         editingAnnotationId = null;
-        // 失焦立即保存（防抖兜底）
-        sendToCode({ type: 'update-note', annotationId: ann.annotationId, note: textarea.value });
+        // 失焦立即保存（防抖兜底）；值未变化不重复发送（避免无谓备份/浮窗刷新）
+        const current = annotations.find(a => a.annotationId === ann.annotationId);
+        if (!current || current.note !== textarea.value) {
+          sendToCode({ type: 'update-note', annotationId: ann.annotationId, note: textarea.value });
+        }
       };
 
       // 初始设置一次高度（内容多时直接展开）
@@ -1233,15 +1278,7 @@
         return;
       }
 
-      // Delete / Backspace: 删除选中的编号点
-      if (
-        (e.key === 'Delete' || e.key === 'Backspace') &&
-        selectedAnnotationId
-      ) {
-        e.preventDefault();
-        sendToCode({ type: 'delete-annotation', annotationId: selectedAnnotationId });
-        return;
-      }
+      // 注意：不绑定 Delete/Backspace 快捷键删除（误删风险，删除只能通过面板两段确认）
     });
 
     // ── 初始状态 ──

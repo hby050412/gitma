@@ -216,7 +216,10 @@ function handleAddAnnotation(): void {
     // 使用 absoluteBoundingBox（页面绝对坐标），兼容嵌套在 Frame/组件内的图层
     const box = target.absoluteBoundingBox;
     if (box) {
-      void createAnnotationAt(box.x, box.y, target.id);
+      void createAnnotationAt(box.x, box.y, target.id).catch((err) => {
+        console.error('[编号标注] 创建编号点失败:', err);
+        figma.notify('创建编号点失败，请重试');
+      });
     } else {
       figma.notify('无法获取该图层的位置');
     }
@@ -245,9 +248,9 @@ async function createAnnotationAt(
   marker.setPluginData(PD.isLocked, 'false');
 
   if (targetNodeId) {
-    const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+    const target = await getNodeOrNull(targetNodeId);
     if (target) {
-      bindAnnotation(annotationId, target);
+      await bindAnnotation(annotationId, target);
     } else {
       setUnboundPosition(marker);
     }
@@ -268,6 +271,9 @@ async function createAnnotationAt(
   if (marker.getPluginData(PD.targetNodeId)) {
     showOrCreatePopup(marker, 'auto');
   }
+
+  // 统一重编号（修复快速连续添加可能产生的同号问题）
+  renumberAll();
 
   // 更新备份
   backupAllAnnotations();
@@ -354,7 +360,7 @@ function handleDeleteAnnotation(annotationId: string): void {
 
   // 清理目标节点上的反向引用
   if (data.targetNodeId) {
-    removeAnnotationRef(data.targetNodeId, annotationId);
+    void removeAnnotationRef(data.targetNodeId, annotationId);
   }
 
   // 标记为程序化删除（documentchange 的 DELETE 事件据此跳过恢复逻辑）
@@ -386,6 +392,9 @@ function handleUpdateNote(annotationId: string, note: string): void {
   const marker = findAnnotationById(annotationId);
   if (!marker) return;
 
+  // 登记程序化修改：pluginData 写入会触发 documentchange，
+  // 避免重入引发锁定编号点误弹提示/静默改绑
+  markProgrammatic(marker.id);
   marker.setPluginData(PD.note, note);
 
   figma.ui.postMessage({
@@ -436,7 +445,7 @@ function updatePopupContent(annotationId: string): void {
   // 尺寸变化后重排：仅图层右侧布局（auto 模式）的浮窗需要重排，
   // 临时查看（click 模式）的浮窗保持当前位置
   if (popup.getPluginData('popupMode') !== 'click') {
-    layoutAllPopups();
+    void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
   }
 }
 
@@ -491,11 +500,18 @@ function updateMarkerAppearance(marker: GroupNode): void {
 
 /** 处理全局配置更新：保存并应用到所有编号点和浮窗 */
 function handleUpdateConfig(config: PluginConfig): void {
+  const base = getConfig();
+  // color 逐字段校验（r/g/b 必须为数字），坏数据回退当前配置
+  const colorValid =
+    config.color &&
+    typeof config.color.r === 'number' &&
+    typeof config.color.g === 'number' &&
+    typeof config.color.b === 'number';
   const sanitized: PluginConfig = {
-    color: config.color || getConfig().color,
-    size: clampNumber(config.size, 12, 60, 24),
-    charsPerLine: clampNumber(config.charsPerLine, 8, 60, 20),
-    fontSize: clampNumber(config.fontSize, 10, 24, 12),
+    color: colorValid ? config.color : base.color,
+    size: clampNumber(config.size, 12, 60, base.size),
+    charsPerLine: clampNumber(config.charsPerLine, 8, 60, base.charsPerLine),
+    fontSize: clampNumber(config.fontSize, 10, 24, base.fontSize),
   };
 
   saveConfig(sanitized);
@@ -522,7 +538,7 @@ function applyConfig(config: PluginConfig): void {
     if (marker && marker.getPluginData(PD.isLocked) === 'true') continue;
     applyPopupStyle(popup, config);
   }
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 /** 将配置尺寸应用到单个编号点（左上角锚定） */
@@ -596,9 +612,11 @@ let lastRelinkTime = 0;
 const pendingRelinkMarkers = new Set<GroupNode>();
 let relinkFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** 调度一次拖尾补测（250ms 后若位置未再变化则补测） */
+/** 调度一次拖尾补测（250ms 后若位置未再变化则补测；拖拽持续时重置计时） */
 function scheduleRelinkFlush(): void {
-  if (relinkFlushTimer) return;
+  if (relinkFlushTimer) {
+    clearTimeout(relinkFlushTimer);
+  }
   relinkFlushTimer = setTimeout(() => {
     relinkFlushTimer = null;
     if (pendingRelinkMarkers.size === 0) return;
@@ -606,7 +624,9 @@ function scheduleRelinkFlush(): void {
     pendingRelinkMarkers.clear();
     for (const marker of batch) {
       if (!marker.removed) {
-        detectAndUpdateBinding(marker, true);
+        void detectAndUpdateBinding(marker, true).catch((err) => {
+          console.error('[编号标注] 补测关联失败:', err);
+        });
       }
     }
   }, 250);
@@ -658,7 +678,7 @@ function hitTestNode(
  * - 未命中任何图层 → 解除绑定（独立编号点）
  * @param force 是否跳过节流（trailing 补测时传 true）
  */
-function detectAndUpdateBinding(marker: GroupNode, force = false): void {
+async function detectAndUpdateBinding(marker: GroupNode, force = false): Promise<void> {
   if (!force) {
     const now = Date.now();
     if (now - lastRelinkTime < RELINK_THROTTLE) {
@@ -680,11 +700,11 @@ function detectAndUpdateBinding(marker: GroupNode, force = false): void {
 
   if (hit) {
     if (hit.id !== currentTargetId) {
-      bindAnnotation(marker.getPluginData(PD.annotationId), hit);
+      await bindAnnotation(marker.getPluginData(PD.annotationId), hit);
     }
   } else if (currentTargetId) {
     // 拖到空白处 → 解除关联
-    removeAnnotationRef(currentTargetId, marker.getPluginData(PD.annotationId));
+    await removeAnnotationRef(currentTargetId, marker.getPluginData(PD.annotationId));
     marker.setPluginData(PD.targetNodeId, '');
     marker.setPluginData(PD.offsetX, String(Math.round(marker.x)));
     marker.setPluginData(PD.offsetY, String(Math.round(marker.y)));
@@ -697,15 +717,18 @@ function detectAndUpdateBinding(marker: GroupNode, force = false): void {
 }
 
 /** 将编号点绑定到目标图层（可重复调用以重新绑定） */
-function bindAnnotation(annotationId: string, target: SceneNode): void {
+async function bindAnnotation(annotationId: string, target: SceneNode): Promise<void> {
   const marker = findAnnotationById(annotationId);
   if (!marker || !target) return;
 
   // 先解除旧绑定
   const oldTargetId = marker.getPluginData(PD.targetNodeId);
   if (oldTargetId && oldTargetId !== target.id) {
-    removeAnnotationRef(oldTargetId, annotationId);
+    await removeAnnotationRef(oldTargetId, annotationId);
   }
+
+  // await 间隙后复查：marker 或 target 可能已被删除（用户快速操作）
+  if (marker.removed || target.removed) return;
 
   marker.setPluginData(PD.targetNodeId, target.id);
   // 偏移量基于页面绝对坐标计算
@@ -720,7 +743,7 @@ function bindAnnotation(annotationId: string, target: SceneNode): void {
       String(Math.round(marker.y - box.y)),
     );
   }
-  addAnnotationRef(target.id, annotationId);
+  await addAnnotationRef(target.id, annotationId);
 
   // 通知 UI
   figma.ui.postMessage({
@@ -729,7 +752,7 @@ function bindAnnotation(annotationId: string, target: SceneNode): void {
   });
 
   // 绑定变化后重排浮窗（auto 模式浮窗跟随新图层位置）
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 
   backupAllAnnotations();
 }
@@ -789,7 +812,7 @@ function renumberAll(): void {
   cleanupOrphanPopups();
 
   // 重排浮窗（编号变化后排列顺序可能改变）
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 
   // 同步到 UI
   syncAllAnnotations();
@@ -878,25 +901,47 @@ function getNextOrder(): number {
 // 反向引用管理
 // ══════════════════════════════════════════════
 
-function addAnnotationRef(targetNodeId: string, annotationId: string): void {
-  const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+/** 异步获取节点（dynamic-page 模式必须用 getNodeByIdAsync），失败返回 null */
+async function getNodeOrNull(id: string): Promise<SceneNode | null> {
+  if (!id) return null;
+  try {
+    return (await figma.getNodeByIdAsync(id)) as SceneNode | null;
+  } catch {
+    return null;
+  }
+}
+
+async function addAnnotationRef(targetNodeId: string, annotationId: string): Promise<void> {
+  const target = await getNodeOrNull(targetNodeId);
   if (!target) return;
 
   const raw = target.getPluginData(REF_KEY);
-  const refs: string[] = raw ? JSON.parse(raw) : [];
+  let refs: string[] = [];
+  if (raw) {
+    try {
+      refs = JSON.parse(raw);
+    } catch {
+      refs = []; // 数据损坏时重置，避免异常中断
+    }
+  }
   if (!refs.includes(annotationId)) {
     refs.push(annotationId);
     target.setPluginData(REF_KEY, JSON.stringify(refs));
   }
 }
 
-function removeAnnotationRef(targetNodeId: string, annotationId: string): void {
-  const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+async function removeAnnotationRef(targetNodeId: string, annotationId: string): Promise<void> {
+  const target = await getNodeOrNull(targetNodeId);
   if (!target) return;
 
   const raw = target.getPluginData(REF_KEY);
   if (!raw) return;
-  const refs: string[] = JSON.parse(raw);
+  let refs: string[] = [];
+  try {
+    refs = JSON.parse(raw);
+  } catch {
+    return; // 数据损坏，无需清理
+  }
   const updated = refs.filter((id) => id !== annotationId);
   target.setPluginData(REF_KEY, JSON.stringify(updated));
 }
@@ -923,41 +968,101 @@ function generateId(): string {
 // 文档变更监听（拖拽检测 + 锁定复位）
 // ══════════════════════════════════════════════
 
-figma.on('documentchange', (event) => {
-  for (const change of event.documentChanges) {
-    // ── 删除事件：编号点只能通过插件删除，画布删除立即恢复 ──
-    if (change.type === 'DELETE' && change.node.type === 'GROUP') {
-      if (!programmaticDeleteIds.has(change.node.id)) {
-        restoreDeletedMarker(change.node.id);
-      }
-      continue;
-    }
+/** initPlugin 重试计数与上限 */
+let initRetryCount = 0;
+const INIT_MAX_RETRY = 3;
 
-    if (change.type !== 'PROPERTY_CHANGE') continue;
-    const node = change.node as SceneNode;
+/** 删除恢复提示节流时间戳 */
+let lastRestoreNotifyTime = 0;
 
-    // 1. 编号点本身或其子节点发生变化（拖拽/缩放/改形状/改外观）
-    //    → 更新偏移 或 锁定复位（锁定状态下任何修改都禁止）
-    //    程序化修改（插件自身操作）按节点 ID 跳过，避免重入引发误解绑/假提示
-    const marker = findMarkerOfNode(node);
-    if (marker) {
-      if (!programmaticChangeIds.has(marker.id)) {
-        handleAnnotationChange(marker);
-      }
-      continue;
+/**
+ * 初始化插件（dynamic-page 增量模式：必须先加载所有页面才能注册 documentchange）
+ * 失败自动重试（限次），避免 documentchange 静默缺失导致插件功能瘫痪
+ */
+async function initPlugin(): Promise<void> {
+  try {
+    await figma.loadAllPagesAsync();
+  } catch (err) {
+    initRetryCount++;
+    console.error('[编号标注] 加载页面失败:', err);
+    if (initRetryCount <= INIT_MAX_RETRY) {
+      figma.notify('编号标注：加载文档数据失败，正在重试…');
+      setTimeout(() => void initPlugin(), 3000);
+    } else {
+      figma.notify('编号标注：文档数据加载失败，请重新打开插件');
     }
-
-    // 2. 目标图层被移动 → 关联的编号点跟随
-    if (!isProgrammaticMove && hasPositionChanged(change.properties)) {
-      handleTargetNodeMoved(node);
-    }
+    return;
   }
+  initRetryCount = 0;
+
+  figma.on('documentchange', (event) => {
+    for (const change of event.documentChanges) {
+      // ── 创建事件：Ctrl+D/复制粘贴会复制编号点（同 annotationId）→ 重新分配唯一 ID 并重编号
+      if (change.type === 'CREATE' && change.node.type === 'GROUP') {
+        const created = change.node as GroupNode;
+        const dupId = created.getPluginData(PD.annotationId);
+        if (dupId && findAnnotationById(dupId)) {
+          const newId = generateId();
+          markProgrammatic(created.id);
+          created.setPluginData(PD.annotationId, newId);
+          renumberAll();
+        }
+        continue;
+      }
+
+      // ── 删除事件：编号点只能通过插件删除，画布删除立即恢复 ──
+      if (change.type === 'DELETE' && change.node.type === 'GROUP') {
+        if (!programmaticDeleteIds.has(change.node.id)) {
+          restoreDeletedMarker(change.node.id);
+        }
+        continue;
+      }
+
+      if (change.type !== 'PROPERTY_CHANGE') continue;
+      const node = change.node as SceneNode;
+
+      // 1. 编号点本身或其子节点发生变化（拖拽/缩放/改形状/改外观）
+      //    → 更新偏移 或 锁定复位（锁定状态下任何修改都禁止）
+      //    程序化修改（插件自身操作）按节点 ID 跳过，避免重入引发误解绑/假提示
+      const marker = findMarkerOfNode(node);
+      if (marker) {
+        if (!programmaticChangeIds.has(marker.id)) {
+          void handleAnnotationChange(marker).catch((err) => {
+            console.error('[编号标注] 处理编号点变化失败:', err);
+            // 出错后补一次备份，避免 UI/备份状态过期
+            backupAllAnnotations();
+          });
+        }
+        continue;
+      }
+
+      // 2. 目标图层被移动 → 关联的编号点跟随
+      if (!isProgrammaticMove && hasPositionChanged(change.properties)) {
+        void handleTargetNodeMoved(node).catch((err) => {
+          console.error('[编号标注] 处理图层移动失败:', err);
+        });
+      }
+    }
+  });
+
+  // 初始化完成后同步一次，保证 UI 展示与备份完整
+  try {
+    syncAllAnnotations();
+    backupAllAnnotations();
+  } catch (err) {
+    console.error('[编号标注] 初始化同步失败:', err);
+  }
+}
+
+void initPlugin().catch((err) => {
+  console.error('[编号标注] 插件初始化异常:', err);
 });
 
 /** 向上回溯节点父链，找到所属的编号点 Group（含自身） */
 function findMarkerOfNode(node: SceneNode): GroupNode | null {
   let current: BaseNode | null = node;
-  while (current) {
+  // 已删除节点（RemovedNode）访问 .parent 会抛错，须跳过
+  while (current && !current.removed) {
     if (
       current.type === 'GROUP' &&
       current.name.startsWith(ANNOTATION_PREFIX)
@@ -997,14 +1102,27 @@ function restoreDeletedMarker(deletedId: string): void {
   // （场景：删除后用户按 Ctrl+Z 撤销，Figma 恢复了原始节点）
   if (findAnnotationById(data.annotationId)) return;
 
-  figma.notify('编号点请通过插件面板删除');
-  void restoreMarker(data);
+  // 恢复提示节流（连续删除同一编号点时避免重复弹窗）
+  const now = Date.now();
+  if (now - lastRestoreNotifyTime > 2000) {
+    figma.notify('编号点请通过插件面板删除');
+    lastRestoreNotifyTime = now;
+  }
+  void restoreMarker(data).catch((err) => {
+    console.error('[编号标注] 恢复编号点失败:', err);
+  });
 }
 
 /** 重建被删除的编号点并恢复全部数据 */
 async function restoreMarker(data: AnnotationData): Promise<void> {
   const marker = await createMarkerNode(data.order, data.x, data.y);
   if (!marker) return;
+
+  // 复查防重复：创建期间用户可能 Ctrl+Z 撤销删除（原节点回归）→ 丢弃新建节点
+  if (findAnnotationById(data.annotationId)) {
+    marker.remove();
+    return;
+  }
 
   marker.setPluginData(PD.annotationId, data.annotationId);
   marker.setPluginData(PD.order, String(data.order));
@@ -1021,9 +1139,9 @@ async function restoreMarker(data: AnnotationData): Promise<void> {
 
   // 恢复绑定关系
   if (data.targetNodeId) {
-    const target = figma.getNodeById(data.targetNodeId) as SceneNode | null;
+    const target = await getNodeOrNull(data.targetNodeId);
     if (target) {
-      addAnnotationRef(data.targetNodeId, data.annotationId);
+      await addAnnotationRef(data.targetNodeId, data.annotationId);
       // 立即把编号点放到绑定目标当前位置（备份可能过期）
       // 程序化定位：登记节点 ID，防护 documentchange 重入（避免恢复时立即触发自动重关联）
       const box = target.absoluteBoundingBox;
@@ -1047,7 +1165,9 @@ async function restoreMarker(data: AnnotationData): Promise<void> {
   // 选中恢复的编号点
   figma.currentPage.selection = [marker];
 
-  // 刷新备份（包含恢复的节点）
+  // 恢复完成：同步 UI 列表、重排浮窗、刷新备份
+  syncAllAnnotations();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
   backupAllAnnotations();
 }
 
@@ -1063,7 +1183,7 @@ function cleanupOrphanPopups(): void {
       activePopups.delete(annotationId);
     }
   }
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 /**
@@ -1079,25 +1199,25 @@ function hasPositionChanged(properties: readonly string[]): boolean {
  * - 锁定状态下任何修改（拖拽/缩放/改形状/改外观）：完整复位并提示
  * - 正常状态下位置变化：更新偏移量
  */
-function handleAnnotationChange(marker: GroupNode): void {
+async function handleAnnotationChange(marker: GroupNode): Promise<void> {
   if (isProgrammaticMove) return;
 
   if (marker.getPluginData(PD.isLocked) === 'true') {
     // 锁定 → 完整复位（位置 + 尺寸 + 外观）
-    resetMarkerState(marker);
+    await resetMarkerState(marker);
     notifyLockedThrottled();
     return;
   }
 
   // 正常拖拽 → 更新偏移量 + 自动重关联（编号点在哪个图层内就跟哪个图层关联）
-  updateMarkerOffset(marker);
-  detectAndUpdateBinding(marker);
+  await updateMarkerOffset(marker);
+  await detectAndUpdateBinding(marker);
 
   // 拖拽编号点时，其临时浮窗恢复到图层右侧布局
   const popup = activePopups.get(marker.getPluginData(PD.annotationId));
   if (popup && !popup.removed && popup.getPluginData('popupMode') === 'click') {
-    restorePopupToAuto(popup, marker);
-    layoutAllPopups();
+    await restorePopupToAuto(popup, marker);
+    await layoutAllPopups();
   }
 
   // 同步 UI
@@ -1121,11 +1241,14 @@ function notifyLockedThrottled(): void {
 }
 
 /** 锁定状态下完整复位编号点：位置 + 尺寸 + 形状 + 外观 */
-function resetMarkerState(marker: GroupNode): void {
+async function resetMarkerState(marker: GroupNode): Promise<void> {
+  if (marker.removed) return;
   const ellipse = marker.children.find((c) => c.type === 'ELLIPSE') as EllipseNode | undefined;
   const text = marker.children.find((c) => c.type === 'TEXT') as TextNode | undefined;
 
   markProgrammatic(marker.id);
+  // 同步部分在标志窗口内执行；异步的位置复位移出窗口，
+  // 避免全局标志跨 await 吞掉其他编号点的事件
   isProgrammaticMove = true;
   try {
     // 1. 复位子节点局部位置与变换（解除翻转/镜像）
@@ -1159,12 +1282,12 @@ function resetMarkerState(marker: GroupNode): void {
 
     // 4. 外观复位
     updateMarkerAppearance(marker);
-
-    // 5. 位置复位（基于存储的偏移量，放在最后以覆盖前面操作引起的位置变化）
-    resetMarkerPosition(marker);
   } finally {
     isProgrammaticMove = false;
   }
+
+  // 5. 位置复位（基于存储的偏移量；异步，标志窗口已关闭）
+  await resetMarkerPosition(marker);
 }
 
 /** 单位变换矩阵（用于解除翻转/镜像） */
@@ -1178,20 +1301,34 @@ const IDENTITY_MATRIX: Transform = [
  * Figma 的部分操作（如垂直翻转）不触发 documentchange 事件，
  * 轮询作为兜底，发现状态与锁定基准不符立即复位。
  */
-setInterval(checkLockedMarkers, 500);
+setInterval(() => {
+  void checkLockedMarkers();
+}, 500);
+
+/** 轮询重入锁：上一次检查未完成时跳过本轮（异步检查可能超过 500ms） */
+let polling = false;
 
 /** 检查所有锁定编号点的状态 */
-function checkLockedMarkers(): void {
-  for (const marker of findAllAnnotationGroups()) {
-    if (marker.getPluginData(PD.isLocked) !== 'true') continue;
-    if (!isMarkerStateClean(marker)) {
-      resetMarkerState(marker);
+async function checkLockedMarkers(): Promise<void> {
+  if (polling) return;
+  polling = true;
+  try {
+    for (const marker of findAllAnnotationGroups()) {
+      if (marker.removed) continue;
+      if (marker.getPluginData(PD.isLocked) !== 'true') continue;
+      if (!(await isMarkerStateClean(marker))) {
+        await resetMarkerState(marker);
+      }
     }
+  } catch (err) {
+    console.error('[编号标注] 锁定检查失败:', err);
+  } finally {
+    polling = false;
   }
 }
 
 /** 校验锁定编号点状态是否与基准一致（位置/尺寸/形状/变换） */
-function isMarkerStateClean(marker: GroupNode): boolean {
+async function isMarkerStateClean(marker: GroupNode): Promise<boolean> {
   // 位置
   const offsetX = Number(marker.getPluginData(PD.offsetX)) || 0;
   const offsetY = Number(marker.getPluginData(PD.offsetY)) || 0;
@@ -1199,15 +1336,21 @@ function isMarkerStateClean(marker: GroupNode): boolean {
   let expectedY = offsetY;
   const targetNodeId = marker.getPluginData(PD.targetNodeId);
   if (targetNodeId) {
-    const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+    const target = await getNodeOrNull(targetNodeId);
     if (target) {
       const box = target.absoluteBoundingBox;
       if (box) {
         expectedX = box.x + offsetX;
         expectedY = box.y + offsetY;
       }
+    } else if (shouldResolveDangling(marker)) {
+      // 绑定目标疑似已删除（连续多次确认）：自愈清除悬空绑定（偏移转为绝对坐标）
+      resolveDanglingBinding(marker);
+      return false;
     }
   }
+  // await 间隙内 marker 可能被删除
+  if (marker.removed) return false;
   if (Math.abs(marker.x - expectedX) > 0.5 || Math.abs(marker.y - expectedY) > 0.5) {
     return false;
   }
@@ -1245,11 +1388,11 @@ function hasFlipTransform(tr: Transform): boolean {
 }
 
 /** 用户拖拽后重新计算并存储偏移量 */
-function updateMarkerOffset(marker: GroupNode): void {
+async function updateMarkerOffset(marker: GroupNode): Promise<void> {
   const targetNodeId = marker.getPluginData(PD.targetNodeId);
 
   if (targetNodeId) {
-    const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+    const target = await getNodeOrNull(targetNodeId);
     if (target) {
       const box = target.absoluteBoundingBox;
       if (box) {
@@ -1257,6 +1400,9 @@ function updateMarkerOffset(marker: GroupNode): void {
         marker.setPluginData(PD.offsetY, String(Math.round(marker.y - box.y)));
         return;
       }
+    } else if (shouldResolveDangling(marker)) {
+      // 绑定目标疑似已删除（连续多次确认）：自愈清除悬空绑定
+      resolveDanglingBinding(marker);
     }
   }
 
@@ -1265,30 +1411,69 @@ function updateMarkerOffset(marker: GroupNode): void {
   marker.setPluginData(PD.offsetY, String(Math.round(marker.y)));
 }
 
+/** 绑定目标已不存在时自愈：清除悬空绑定，偏移量转为绝对坐标（保持当前位置） */
+function resolveDanglingBinding(marker: GroupNode): void {
+  const oldTargetId = marker.getPluginData(PD.targetNodeId);
+  if (oldTargetId) {
+    void removeAnnotationRef(oldTargetId, marker.getPluginData(PD.annotationId));
+  }
+  marker.setPluginData(PD.targetNodeId, '');
+  marker.setPluginData(PD.offsetX, String(Math.round(marker.x)));
+  marker.setPluginData(PD.offsetY, String(Math.round(marker.y)));
+  // 通知 UI + 备份
+  figma.ui.postMessage({
+    type: 'annotation-updated',
+    annotation: readAnnotationData(marker),
+  });
+  backupAllAnnotations();
+}
+
 /** 将编号点复位到锁定时的位置（根据存储的偏移量 + 目标图层位置） */
-function resetMarkerPosition(marker: GroupNode): void {
+async function resetMarkerPosition(marker: GroupNode): Promise<void> {
   const targetNodeId = marker.getPluginData(PD.targetNodeId);
   const offsetX = Number(marker.getPluginData(PD.offsetX)) || 0;
   const offsetY = Number(marker.getPluginData(PD.offsetY)) || 0;
 
+  // 异步查找放在标志窗口外（避免全局标志跨 await 吞掉其他事件）
+  let targetBox: Rect | null = null;
+  if (targetNodeId) {
+    const target = await getNodeOrNull(targetNodeId);
+    if (target) {
+      targetBox = target.absoluteBoundingBox;
+    } else if (shouldResolveDangling(marker)) {
+      // 绑定目标疑似不存在（连续多次确认）：自愈清除悬空绑定
+      resolveDanglingBinding(marker);
+      return;
+    }
+  }
+
+  markProgrammatic(marker.id);
   isProgrammaticMove = true;
   try {
-    if (targetNodeId) {
-      const target = figma.getNodeById(targetNodeId) as SceneNode | null;
-      if (target) {
-        const box = target.absoluteBoundingBox;
-        if (box) {
-          marker.x = box.x + offsetX;
-          marker.y = box.y + offsetY;
-          return;
-        }
-      }
+    if (targetBox) {
+      marker.x = targetBox.x + offsetX;
+      marker.y = targetBox.y + offsetY;
+    } else {
+      marker.x = offsetX;
+      marker.y = offsetY;
     }
-    marker.x = offsetX;
-    marker.y = offsetY;
   } finally {
     isProgrammaticMove = false;
   }
+}
+
+/** 悬空绑定连续确认计数：getNodeByIdAsync 返回 null 可能是暂不可查（加载中/不可见），
+ *  连续多次仍 null 才判定为已删除并自愈，避免误清除绑定 */
+const danglingCounts = new Map<string, number>();
+function shouldResolveDangling(marker: GroupNode): boolean {
+  const key = marker.getPluginData(PD.annotationId);
+  const count = (danglingCounts.get(key) || 0) + 1;
+  danglingCounts.set(key, count);
+  if (count >= 3) {
+    danglingCounts.delete(key);
+    return true;
+  }
+  return false;
 }
 
 /** 程序化移动编号点（由插件逻辑触发，不会被当作用户拖拽） */
@@ -1304,7 +1489,7 @@ function moveMarkerProgrammatically(marker: GroupNode, x: number, y: number): vo
 }
 
 /** 目标图层移动时，关联的编号点跟随，浮窗重排跟随 */
-function handleTargetNodeMoved(targetNode: SceneNode): void {
+async function handleTargetNodeMoved(targetNode: SceneNode): Promise<void> {
   // 查找绑定到 targetNode 自身或其任意后代的编号点
   // （拖动顶层容器时，容器内子组件绑定的编号点也应跟随）
   const markers = findAllAnnotationGroups().filter((marker) => {
@@ -1315,20 +1500,30 @@ function handleTargetNodeMoved(targetNode: SceneNode): void {
 
   // 每个编号点用自己的直接绑定目标的实时 absoluteBoundingBox 计算新位置
   // （容器移动后，子节点的 absoluteBoundingBox 已实时更新）
-  for (const marker of markers) {
-    const targetId = marker.getPluginData(PD.targetNodeId);
-    const target = targetId ? (figma.getNodeById(targetId) as SceneNode | null) : null;
-    if (!target) continue;
-    const box = target.absoluteBoundingBox;
-    if (!box) continue;
+  // 并行查找，避免逐 marker 串行 await 造成延迟
+  const positions = await Promise.all(
+    markers.map(async (marker) => {
+      const targetId = marker.getPluginData(PD.targetNodeId);
+      const target = targetId ? await getNodeOrNull(targetId) : null;
+      if (!target || target.removed) return null;
+      const box = target.absoluteBoundingBox;
+      if (!box || marker.removed) return null;
+      return {
+        marker,
+        x: box.x + (Number(marker.getPluginData(PD.offsetX)) || 0),
+        y: box.y + (Number(marker.getPluginData(PD.offsetY)) || 0),
+      };
+    }),
+  );
 
-    const offsetX = Number(marker.getPluginData(PD.offsetX)) || 0;
-    const offsetY = Number(marker.getPluginData(PD.offsetY)) || 0;
-    moveMarkerProgrammatically(marker, box.x + offsetX, box.y + offsetY);
+  for (const pos of positions) {
+    if (pos) {
+      moveMarkerProgrammatically(pos.marker, pos.x, pos.y);
+    }
   }
 
   // 浮窗跟随：重排该容器下的所有浮窗
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 /** 判断 targetId 是否为 node 自身或其后代节点 */
@@ -1394,14 +1589,17 @@ figma.on('selectionchange', () => {
   }
 
   // 选中其他内容 → 临时查看的浮窗恢复图层右侧布局，通知 UI 取消高亮
-  restoreAllClickPopups();
+  void restoreAllClickPopups().catch((err) => {
+    console.error('[编号标注] 恢复浮窗布局失败:', err);
+  });
   figma.ui.postMessage({ type: 'annotation-selected', annotationId: null });
 });
 
 /** 从选中节点回溯查找所属浮窗 Frame（含选中浮窗子节点的情况） */
 function findPopupFrameFromSelection(node: SceneNode): FrameNode | null {
   let current: BaseNode | null = node;
-  while (current) {
+  // 已删除节点访问 .parent 会抛错，须跳过
+  while (current && !current.removed) {
     if (
       current.type === 'FRAME' &&
       current.name.startsWith(POPUP_PREFIX)
@@ -1461,7 +1659,7 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
       // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
       figma.currentPage.appendChild(popup);
       // 创建完成后统一重排（考虑同容器多个浮窗）
-      layoutAllPopups();
+      void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
     })
     .catch(() => {
       // 创建失败（如字体加载失败）：清理标记，允许后续重试
@@ -1478,39 +1676,39 @@ function positionPopupNearMarker(popup: FrameNode, marker: GroupNode): void {
 }
 
 /** 将浮窗恢复到图层右侧布局模式 */
-function restorePopupToAuto(popup: FrameNode, marker: GroupNode): void {
+async function restorePopupToAuto(popup: FrameNode, marker: GroupNode): Promise<void> {
   popup.setPluginData('popupMode', 'auto');
-  positionPopupNearTarget(popup, marker);
+  await positionPopupNearTarget(popup, marker);
 }
 
 /** 所有临时查看（click 模式）的浮窗恢复到图层右侧布局 */
-function restoreAllClickPopups(): void {
+async function restoreAllClickPopups(): Promise<void> {
   let changed = false;
   for (const [annotationId, popup] of activePopups) {
     if (popup.removed) continue;
     if (popup.getPluginData('popupMode') === 'click') {
       const marker = findAnnotationById(annotationId);
       if (marker) {
-        restorePopupToAuto(popup, marker);
+        await restorePopupToAuto(popup, marker);
         changed = true;
       }
     }
   }
-  if (changed) layoutAllPopups();
+  if (changed) await layoutAllPopups();
 }
 
 /**
  * 将浮窗定位到绑定图层的顶层容器右侧（顶部对齐）
  * 单个浮窗的初始定位，多浮窗排列由 layoutAllPopups 统一处理
  */
-function positionPopupNearTarget(popup: FrameNode, marker: GroupNode): void {
+async function positionPopupNearTarget(popup: FrameNode, marker: GroupNode): Promise<void> {
   const targetNodeId = marker.getPluginData(PD.targetNodeId);
   if (!targetNodeId) {
     positionPopupNearMarker(popup, marker);
     return;
   }
 
-  const target = figma.getNodeById(targetNodeId) as SceneNode | null;
+  const target = await getNodeOrNull(targetNodeId);
   if (!target) {
     positionPopupNearMarker(popup, marker);
     return;
@@ -1530,7 +1728,14 @@ function positionPopupNearTarget(popup: FrameNode, marker: GroupNode): void {
 /** 获取节点的顶层祖先（父节点为 PAGE 的最外层节点） */
 function getTopLevelAncestor(node: BaseNode): SceneNode {
   let current: BaseNode = node;
-  while (current.parent && current.parent.type !== 'PAGE') {
+  // 已删除节点访问 .parent 会抛错，须跳过
+  while (
+    current &&
+    !current.removed &&
+    current.parent &&
+    !current.parent.removed &&
+    current.parent.type !== 'PAGE'
+  ) {
     current = current.parent;
   }
   return current as SceneNode;
@@ -1540,7 +1745,7 @@ function getTopLevelAncestor(node: BaseNode): SceneNode {
  * 重新排列所有活跃浮窗：
  * 按顶层容器分组，同容器内的浮窗按编号从上到下排列，间隔 8px，互不重叠
  */
-function layoutAllPopups(): void {
+async function layoutAllPopups(): Promise<void> {
   // 收集: 顶层容器id → { container, popups }
   const groups = new Map<
     string,
@@ -1556,8 +1761,10 @@ function layoutAllPopups(): void {
 
     const targetId = marker.getPluginData(PD.targetNodeId);
     if (!targetId) continue;
-    const target = figma.getNodeById(targetId) as SceneNode | null;
+    const target = await getNodeOrNull(targetId);
     if (!target) continue;
+    // await 间隙后复查（浮窗/编号点可能已被删除）
+    if (popup.removed || marker.removed) continue;
 
     const container = getTopLevelAncestor(target);
     const key = container.id;
@@ -1677,7 +1884,7 @@ async function createPopupFrame(
 
   // ── 位置 ──
   if (mode === 'auto') {
-    positionPopupNearTarget(frame, marker);
+    await positionPopupNearTarget(frame, marker);
   } else {
     positionPopupNearMarker(frame, marker);
   }
@@ -1696,7 +1903,7 @@ function closePopupByFrame(popupFrame: FrameNode): void {
   }
   popupFrame.remove();
   // 关闭后重排（剩余浮窗补位）
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 /** 按 annotationId 关闭浮窗 */
@@ -1706,7 +1913,7 @@ function closePopup(annotationId: string): void {
     popup.remove();
   }
   activePopups.delete(annotationId);
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 /** 强制删除编号点对应的浮窗（含页面级兜底扫描，覆盖 map 状态异常） */
@@ -1728,7 +1935,7 @@ function removePopupForcefully(annotationId: string): void {
     }
   }
 
-  layoutAllPopups();
+  void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
 
 // ══════════════════════════════════════════════
