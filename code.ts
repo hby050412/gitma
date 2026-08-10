@@ -250,7 +250,7 @@ async function createAnnotationAt(
   if (targetNodeId) {
     const target = await getNodeOrNull(targetNodeId);
     if (target) {
-      await bindAnnotation(annotationId, target);
+      await bindAnnotation(marker, target);
     } else {
       setUnboundPosition(marker);
     }
@@ -268,7 +268,6 @@ async function createAnnotationAt(
   figma.currentPage.selection = [marker];
 
   // 自动显示备注浮窗：仅有关联图层时显示在图层右侧；无关联不显示
-  console.log('[编号标注] 创建完成，绑定目标:', marker.getPluginData(PD.targetNodeId) || '无');
   if (marker.getPluginData(PD.targetNodeId)) {
     showOrCreatePopup(marker, 'auto');
   }
@@ -411,11 +410,11 @@ function handleUpdateNote(annotationId: string, note: string): void {
 
 /** 刷新浮窗中的备注内容（备注更新后同步显示） */
 function updatePopupContent(annotationId: string): void {
-  const popup = activePopups.get(annotationId);
-  if (!popup || popup.removed) return;
-
-  const marker = findAnnotationById(annotationId);
-  if (!marker) return;
+  const entry = activePopups.get(annotationId);
+  if (!entry || entry.popup.removed) return;
+  const popup = entry.popup;
+  const marker = entry.marker;
+  if (!marker || marker.removed) return;
 
   const note = marker.getPluginData(PD.note) || '(暂无备注)';
   const text = note.length > 120 ? note.substring(0, 120) + '…' : note;
@@ -533,11 +532,11 @@ function applyConfig(config: PluginConfig): void {
   }
 
   // 2. 备注区域宽度 + 字号应用到所有浮窗（锁定的编号点浮窗跳过，保持一致性）
-  for (const [annotationId, popup] of activePopups) {
-    if (popup.removed) continue;
-    const marker = findAnnotationById(annotationId);
+  for (const [, entry] of activePopups) {
+    if (entry.popup.removed) continue;
+    const marker = entry.marker;
     if (marker && marker.getPluginData(PD.isLocked) === 'true') continue;
-    applyPopupStyle(popup, config);
+    applyPopupStyle(entry.popup, config);
   }
   void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
 }
@@ -701,7 +700,7 @@ async function detectAndUpdateBinding(marker: GroupNode, force = false): Promise
 
   if (hit) {
     if (hit.id !== currentTargetId) {
-      await bindAnnotation(marker.getPluginData(PD.annotationId), hit);
+      await bindAnnotation(marker, hit);
     }
   } else if (currentTargetId) {
     // 拖到空白处 → 解除关联
@@ -717,10 +716,10 @@ async function detectAndUpdateBinding(marker: GroupNode, force = false): Promise
   }
 }
 
-/** 将编号点绑定到目标图层（可重复调用以重新绑定） */
-async function bindAnnotation(annotationId: string, target: SceneNode): Promise<void> {
-  const marker = findAnnotationById(annotationId);
-  if (!marker || !target) return;
+/** 将编号点绑定到目标图层（可重复调用以重新绑定）。marker 直接传引用，不依赖 findAll */
+async function bindAnnotation(marker: GroupNode, target: SceneNode): Promise<void> {
+  if (!marker || marker.removed || !target) return;
+  const annotationId = marker.getPluginData(PD.annotationId);
 
   // 先解除旧绑定
   const oldTargetId = marker.getPluginData(PD.targetNodeId);
@@ -831,8 +830,9 @@ async function renumberAll(): Promise<void> {
 
 /** 重编号后同步浮窗中的序号 */
 function updatePopupNumber(annotationId: string, order: number): void {
-  const popup = activePopups.get(annotationId);
-  if (!popup || popup.removed) return;
+  const entry = activePopups.get(annotationId);
+  if (!entry || entry.popup.removed) return;
+  const popup = entry.popup;
 
   const numText = popup.children.find(
     (c) => c.type === 'TEXT' && c.name === 'popupNum',
@@ -1203,36 +1203,12 @@ async function restoreMarker(data: AnnotationData): Promise<void> {
   backupAllAnnotations();
 }
 
-/** 清理孤儿浮窗：编号点已不存在但仍残留的浮窗 */
-/**
- * 清理孤儿浮窗：编号点已删除但浮窗残留。
- * 注意：findAll 在 dynamic-page 模式下对刚创建的节点可能查不到，
- * 因此采用「连续两次确认」机制，避免误删正常浮窗。
- */
-const orphanMissCounts = new Map<string, number>();
+/** 清理孤儿浮窗：编号点已删除但浮窗残留（用 marker 引用检查，不依赖 findAll） */
 function cleanupOrphanPopups(): void {
-  for (const [annotationId, popup] of activePopups) {
-    if (popup.removed) {
+  for (const [annotationId, entry] of activePopups) {
+    if (entry.popup.removed || entry.marker.removed) {
+      if (!entry.popup.removed) entry.popup.remove();
       activePopups.delete(annotationId);
-      orphanMissCounts.delete(annotationId);
-      continue;
-    }
-    if (!findAnnotationById(annotationId)) {
-      const miss = (orphanMissCounts.get(annotationId) || 0) + 1;
-      orphanMissCounts.set(annotationId, miss);
-      // 诊断：列出页面顶层节点，确认编号点是否真的不在
-      const topInfo = figma.currentPage.children
-        .map((c) => `${c.type}:${c.name}:${c.getPluginData(PD.annotationId)}`)
-        .join(' | ');
-      console.warn('[编号标注] 孤儿检查 miss', miss, '次:', annotationId, '| 页面节点:', topInfo);
-      if (miss >= 2) {
-        console.warn('[编号标注] 孤儿浮窗清理（连续两次确认编号点不存在）:', annotationId);
-        popup.remove();
-        activePopups.delete(annotationId);
-        orphanMissCounts.delete(annotationId);
-      }
-    } else {
-      orphanMissCounts.delete(annotationId);
     }
   }
   void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
@@ -1266,9 +1242,9 @@ async function handleAnnotationChange(marker: GroupNode): Promise<void> {
   await detectAndUpdateBinding(marker);
 
   // 拖拽编号点时，其临时浮窗恢复到图层右侧布局
-  const popup = activePopups.get(marker.getPluginData(PD.annotationId));
-  if (popup && !popup.removed && popup.getPluginData('popupMode') === 'click') {
-    await restorePopupToAuto(popup, marker);
+  const entry = activePopups.get(marker.getPluginData(PD.annotationId));
+  if (entry && !entry.popup.removed && entry.popup.getPluginData('popupMode') === 'click') {
+    await restorePopupToAuto(entry.popup, marker);
     await layoutAllPopups();
   }
 
@@ -1593,8 +1569,9 @@ function isNodeOrDescendant(node: BaseNode, targetId: string): boolean {
 // 临时浮窗管理
 // ══════════════════════════════════════════════
 
-/** 活跃浮窗: annotationId → FrameNode */
-const activePopups = new Map<string, FrameNode>();
+/** 活跃浮窗: annotationId → { popup, marker }
+ * 同时持有 marker 引用，避免依赖 findAll（dynamic-page 模式下查不到刚创建的编号点） */
+const activePopups = new Map<string, { popup: FrameNode; marker: GroupNode }>();
 
 const POPUP_PREFIX = '[Popup]';
 
@@ -1662,13 +1639,17 @@ const autoCreatedIds = new Set<string>();
 function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
   const annotationId = marker.getPluginData(PD.annotationId);
   const existing = activePopups.get(annotationId);
-  console.log('[编号标注] showOrCreatePopup:', mode, '| id:', annotationId, '| existing:', !!existing, '| creating:', popupCreating.has(annotationId));
 
-  if (existing && !existing.removed) {
+  // 清理已删除的 map 条目（页面浮窗可能已被移除，避免误判"不存在"而重复创建）
+  if (existing && existing.popup.removed) {
+    activePopups.delete(annotationId);
+  }
+
+  if (existing && !existing.popup.removed) {
     // 已存在 → 点击唤出时移动到编号点旁，并刷新内容保证最新
     // （刚自动创建的不移动，避免添加时的自动选中把浮窗从图层右侧拉走）
     if (mode === 'click' && !autoCreatedIds.has(annotationId)) {
-      positionPopupNearMarker(existing, marker);
+      positionPopupNearMarker(existing.popup, marker);
       updatePopupContent(annotationId);
     }
     return;
@@ -1699,14 +1680,25 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
         popup.remove();
         return;
       }
-      activePopups.set(annotationId, popup);
+      // 防重复：清理页面上同 popupFor 的旧浮窗（历史遗留/竞态产生的重复浮窗）
+      for (const node of figma.currentPage.children) {
+        if (
+          node.type === 'FRAME' &&
+          node !== popup &&
+          node.name.startsWith(POPUP_PREFIX) &&
+          node.getPluginData('popupFor') === annotationId
+        ) {
+          console.warn('[编号标注] 清理重复浮窗:', annotationId);
+          node.remove();
+        }
+      }
+      activePopups.set(annotationId, { popup, marker });
       // 新建浮窗置顶：确保在页面最顶层，不被其他浮窗遮挡（利于编辑）
       figma.currentPage.appendChild(popup);
       // 防御：auto 模式创建完成后显式定位到图层右侧（覆盖创建期间的异步时序问题）
       if (mode === 'auto') {
         await positionPopupNearTarget(popup, marker);
       }
-      console.log('[编号标注] 浮窗创建完成:', annotationId, 'mode:', mode, '位置:', Math.round(popup.x), Math.round(popup.y), '绑定:', marker.getPluginData(PD.targetNodeId) || '无');
       // 创建完成后统一重排（考虑同容器多个浮窗）
       void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
     })
@@ -1734,14 +1726,13 @@ async function restorePopupToAuto(popup: FrameNode, marker: GroupNode): Promise<
 /** 所有临时查看（click 模式）的浮窗恢复到图层右侧布局 */
 async function restoreAllClickPopups(): Promise<void> {
   let changed = false;
-  for (const [annotationId, popup] of activePopups) {
-    if (popup.removed) continue;
+  for (const [, entry] of activePopups) {
+    const popup = entry.popup;
+    const marker = entry.marker;
+    if (popup.removed || marker.removed) continue;
     if (popup.getPluginData('popupMode') === 'click') {
-      const marker = findAnnotationById(annotationId);
-      if (marker) {
-        await restorePopupToAuto(popup, marker);
-        changed = true;
-      }
+      await restorePopupToAuto(popup, marker);
+      changed = true;
     }
   }
   if (changed) await layoutAllPopups();
@@ -1802,12 +1793,12 @@ async function layoutAllPopups(): Promise<void> {
     { container: SceneNode; popups: { marker: GroupNode; popup: FrameNode }[] }
   >();
 
-  for (const [annotationId, popup] of activePopups) {
-    if (popup.removed) continue;
+  for (const [, entry] of activePopups) {
+    const popup = entry.popup;
+    const marker = entry.marker;
+    if (popup.removed || marker.removed) continue;
     // 临时查看（click 模式）的浮窗不参与图层右侧布局
     if (popup.getPluginData('popupMode') === 'click') continue;
-    const marker = findAnnotationById(annotationId);
-    if (!marker) continue;
 
     const targetId = marker.getPluginData(PD.targetNodeId);
     if (!targetId) continue;
@@ -1948,7 +1939,6 @@ async function createPopupFrame(
 /** 关闭并删除浮窗 Frame */
 function closePopupByFrame(popupFrame: FrameNode): void {
   const annotationId = popupFrame.getPluginData('popupFor');
-  console.warn('[编号标注] 浮窗被关闭(closePopupByFrame):', annotationId);
   if (annotationId) {
     activePopups.delete(annotationId);
   }
@@ -1959,9 +1949,9 @@ function closePopupByFrame(popupFrame: FrameNode): void {
 
 /** 按 annotationId 关闭浮窗 */
 function closePopup(annotationId: string): void {
-  const popup = activePopups.get(annotationId);
-  if (popup && !popup.removed) {
-    popup.remove();
+  const entry = activePopups.get(annotationId);
+  if (entry && !entry.popup.removed) {
+    entry.popup.remove();
   }
   activePopups.delete(annotationId);
   void layoutAllPopups().catch((err) => { console.error("[编号标注] 浮窗重排失败:", err); });
@@ -1970,9 +1960,9 @@ function closePopup(annotationId: string): void {
 /** 强制删除编号点对应的浮窗（含页面级兜底扫描，覆盖 map 状态异常） */
 function removePopupForcefully(annotationId: string): void {
   // 1. 内存 map 清理
-  const popup = activePopups.get(annotationId);
-  if (popup && !popup.removed) {
-    popup.remove();
+  const entry = activePopups.get(annotationId);
+  if (entry && !entry.popup.removed) {
+    entry.popup.remove();
   }
   activePopups.delete(annotationId);
 
@@ -2003,8 +1993,8 @@ figma.on('currentpagechange', () => {
 
 // 关闭插件时清理所有浮窗
 figma.on('close', () => {
-  for (const popup of activePopups.values()) {
-    if (!popup.removed) popup.remove();
+  for (const entry of activePopups.values()) {
+    if (!entry.popup.removed) entry.popup.remove();
   }
   activePopups.clear();
   console.log('[编号标注] 插件已关闭');
