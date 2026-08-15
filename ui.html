@@ -886,7 +886,12 @@
       sendToCode({ type: 'collapse-panel' });
     };
 
+    // 添加按钮防抖：500ms 内只响应一次（防止双击/误触创建两个重叠编号点）
+    let lastAddTime = 0;
     btnAdd.onclick = () => {
+      const now = Date.now();
+      if (now - lastAddTime < 500) return;
+      lastAddTime = now;
       sendToCode({ type: 'add-annotation' });
     };
 

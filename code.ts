@@ -1032,6 +1032,11 @@ async function initPlugin(): Promise<void> {
       // ── 创建事件：Ctrl+D/复制粘贴会复制编号点（同 annotationId）→ 重新分配唯一 ID 并重编号
       if (change.type === 'CREATE' && change.node.type === 'GROUP') {
         const created = change.node as GroupNode;
+        // 插件自己创建的编号点（已登记 markProgrammatic）→ 跳过，避免误判重复而改写 annotationId
+        if (programmaticChangeIds.has(created.id)) {
+          programmaticChangeIds.delete(created.id);
+          continue;
+        }
         const dupId = created.getPluginData(PD.annotationId);
         if (dupId && findAnnotationById(dupId)) {
           const newId = generateId();
@@ -1076,6 +1081,17 @@ async function initPlugin(): Promise<void> {
       }
     }
   });
+
+  // 清理页面上残留的浮窗（正常浮窗在插件关闭时已清理，页面上的都是历史残留）
+  try {
+    for (const node of figma.currentPage.children) {
+      if (node.type === 'FRAME' && node.name.startsWith(POPUP_PREFIX)) {
+        node.remove();
+      }
+    }
+  } catch (err) {
+    console.error('[编号标注] 清理残留浮窗失败:', err);
+  }
 
   // 初始化完成后同步一次，保证 UI 展示与备份完整
   try {
@@ -1655,6 +1671,22 @@ function showOrCreatePopup(marker: GroupNode, mode: 'auto' | 'click'): void {
     return;
   }
 
+  // 兜底：map 里没有条目时，扫描页面上是否已有同 popupFor 的浮窗（map 状态异常时重新注册，避免重复创建）
+  if (mode === 'click' && !popupCreating.has(annotationId)) {
+    const pagePopup = figma.currentPage.children.find(
+      (c) =>
+        c.type === 'FRAME' &&
+        c.name.startsWith(POPUP_PREFIX) &&
+        (c as FrameNode).getPluginData('popupFor') === annotationId,
+    ) as FrameNode | undefined;
+    if (pagePopup && !pagePopup.removed) {
+      activePopups.set(annotationId, { popup: pagePopup, marker });
+      positionPopupNearMarker(pagePopup, marker);
+      updatePopupContent(annotationId);
+      return;
+    }
+  }
+
   // 创建中：忽略重复请求（添加时 auto 创建 + selectionchange 触发 click 的竞态）
   if (popupCreating.has(annotationId)) return;
 
@@ -1967,12 +1999,13 @@ function removePopupForcefully(annotationId: string): void {
   activePopups.delete(annotationId);
 
   // 2. 页面兜底：扫描页面上所有浮窗，按 popupFor 标记强制删除
-  for (const node of figma.currentPage.children) {
-    if (node.type === 'FRAME' && node.name.startsWith(POPUP_PREFIX)) {
-      const frame = node as FrameNode;
-      if (frame.getPluginData('popupFor') === annotationId) {
-        frame.remove();
-      }
+  const pagePopups = figma.currentPage.children.filter(
+    (c) => c.type === 'FRAME' && c.name.startsWith(POPUP_PREFIX),
+  );
+  for (const node of pagePopups) {
+    const frame = node as FrameNode;
+    if (frame.getPluginData('popupFor') === annotationId) {
+      frame.remove();
     }
   }
 
